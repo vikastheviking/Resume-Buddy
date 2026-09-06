@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>ATS Resume Architect & 95%+ Optimizer</title>
-  <meta name="description" content="Production-grade AI ATS resume optimization engine. Achieve 95%+ match scores with executive STAR metrics.">
+  <title>Resume-Buddy — ATS Resume Optimizer</title>
+  <meta name="description" content="Rewrite your resume against a job description and score it for applicant tracking system compatibility.">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -19,7 +19,7 @@
         <div class="brand-icon">🎯</div>
         <div class="brand-text">
           <div class="brand-title">ATS Resume Architect</div>
-          <div class="brand-badge">95%+ Optimization Engine</div>
+          <div class="brand-badge">ATS Optimization Engine</div>
         </div>
       </div>
       <div class="nav-actions">
@@ -101,11 +101,11 @@
     <section class="action-section">
       <button id="optimize-btn" class="btn btn-primary btn-large">
         <span class="btn-icon">🚀</span>
-        <span class="btn-text">Optimize Resume for ATS (95%+ Target)</span>
+        <span class="btn-text">Optimize Resume for ATS</span>
       </button>
       <div id="loading-indicator" class="loading-bar hidden">
         <div class="spinner"></div>
-        <div class="loading-status-text">Analyzing keywords, synthesizing executive STAR metrics, and optimizing for 95%+ ATS alignment...</div>
+        <div class="loading-status-text">Analyzing keywords, rewriting bullets, and scoring ATS alignment...</div>
       </div>
     </section>
 
@@ -136,14 +136,14 @@
           <!-- Score Lift Arrow -->
           <div class="score-boost-box">
             <div class="boost-arrow">➔</div>
-            <div id="score-boost-badge" class="boost-badge">+0% Score Boost</div>
+            <div id="score-boost-badge" class="boost-badge">--</div>
           </div>
 
           <!-- Updated (Optimized) Score -->
           <div class="score-box optimized-box">
             <div class="score-tag">Updated ATS Score</div>
             <div class="score-display">
-              <span id="updated-score-num" class="score-value">95%+</span>
+              <span id="updated-score-num" class="score-value">0%</span>
             </div>
             <div class="score-bar-track">
               <div id="updated-score-bar" class="score-bar-fill optimized-fill" style="width: 0%;"></div>
@@ -159,7 +159,7 @@
         <div class="result-header">
           <div>
             <h2>Result Resume</h2>
-            <p class="result-sub">Clean single-column ATS format with preserved contact details & quantified STAR impact</p>
+            <p class="result-sub">Clean single-column ATS format with your contact details and experience preserved</p>
           </div>
           
           <!-- Result Actions Toolbar -->
@@ -175,6 +175,9 @@
             </button>
           </div>
         </div>
+
+        <!-- Score breakdown: the evidence behind the numbers above -->
+        <div id="audit-detail" class="audit-detail hidden"></div>
 
         <!-- Rendered Resume Container -->
         <div id="resume-preview" class="resume-preview-sheet"></div>
@@ -192,7 +195,7 @@
           <span class="modal-icon">🎯</span>
           <div>
             <h3 class="modal-title">ATS Resume Architect</h3>
-            <p class="modal-sub">Enterprise 95%+ ATS Optimization</p>
+            <p class="modal-sub">ATS resume optimization</p>
           </div>
         </div>
         <button id="close-modal-btn" class="modal-close" type="button">&times;</button>

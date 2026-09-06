@@ -4,6 +4,7 @@ python-docx>=1.1.0      # DOCX read + export
 reportlab>=4.2.0        # ATS-clean PDF export
 openai>=1.30.0          # OpenAI-compatible LLM transport (Groq, DeepSeek, NVIDIA NIM)
 requests>=2.31.0        # raw HTTP calls to LLM providers
+python-dotenv>=1.0.0    # loads .env when the engine runs standalone
 
 # REST API service (engine.api) — launched by the Node server
 starlette>=0.37.0

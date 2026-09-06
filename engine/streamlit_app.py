@@ -3,12 +3,11 @@ ATS Resume Architect & Optimizer - Streamlit Web Application
 """
 
 import streamlit as st
-import time
-from engine.extractor import extract_text_from_bytes, clean_resume_text
+from engine.extractor import extract_text_from_bytes
 from engine.scorer import evaluate_resume_ats
 from engine.optimizer import optimize_resume
 from engine.exporter import generate_ats_pdf, generate_ats_docx
-from engine.llm_client import BackendLLMClient, UnifiedLLMClient
+from engine.llm_client import BackendLLMClient
 from engine.sample_data import SAMPLE_JOBS
 from engine.auth import login_user, signup_user
 
@@ -123,7 +122,7 @@ with st.sidebar:
         st.markdown("""
         <div style="background:#F0FDF4; border:1px solid #BBF7D0; border-radius:8px; padding:12px; margin-bottom:16px;">
             <span style="font-weight:700; color:#15803D; font-size:0.9rem;">🟢 System Status: Active</span><br>
-            <span style="font-size:0.8rem; color:#166534;">• Target Match: 95%+ ATS Score<br>• Standard: Single-Column Clean ATS<br>• Security: Enterprise Secured Backend</span>
+            <span style="font-size:0.8rem; color:#166534;">• Scored against your target job description<br>• Standard: single-column clean ATS<br>• Your details are preserved verbatim</span>
         </div>
         """, unsafe_allow_html=True)
 
@@ -221,7 +220,7 @@ if not st.session_state["authenticated"]:
     st.stop()
 
 # ----------------- MAIN INTERFACE -----------------
-st.markdown('<div class="main-title">🎯 ATS Resume Architect & 95%+ Optimizer</div>', unsafe_allow_html=True)
+st.markdown('<div class="main-title">🎯 Resume-Buddy — ATS Resume Optimizer</div>', unsafe_allow_html=True)
 # st.markdown('<div class="sub-title">Algorithmic Keyword Matching • Semantic Relevance Alignment • Google XYZ STAR Metrics • Single-Column ATS Clean Output</div>', unsafe_allow_html=True)
 
 col_input1, col_input2 = st.columns(2)
@@ -264,7 +263,7 @@ with col_input2:
 st.markdown("")
 col_btn1, col_btn2, col_btn3 = st.columns([1, 2, 1])
 with col_btn2:
-    analyze_btn = st.button("🚀 Analyze & Generate 95%+ ATS Resume", type="primary", use_container_width=True)
+    analyze_btn = st.button("🚀 Analyze & Optimize Resume", type="primary", use_container_width=True)
 
 if analyze_btn:
     if not resume_text.strip() or not jd_text.strip():
@@ -286,7 +285,7 @@ if analyze_btn:
                 baseline_audit=baseline_audit
             )
             
-            status.update(label=f"✅ Optimization Complete! Achieved {optimized_audit['overall_score']}% ATS Score!", state="complete", expanded=False)
+            status.update(label=f"✅ Complete — ATS score {optimized_audit['overall_score']}%", state="complete", expanded=False)
 
             st.session_state["baseline_audit"] = baseline_audit
             st.session_state["optimized_audit"] = optimized_audit
@@ -301,7 +300,14 @@ if st.session_state.get("has_results", False):
 
     st.markdown("---")
     st.header("📊 ATS Score Transformation")
-    # st.caption(f"⚡ Generated using: **{o_audit.get('engine_used', 'Engine')}**")
+    _engine = o_audit.get("engine_used", "")
+    if _engine.startswith("structural"):
+        st.warning(
+            f"Formatting was cleaned up, but no AI rewrite ran ({_engine}). "
+            "Wording and keyword coverage are unchanged from your original."
+        )
+    elif _engine:
+        st.caption(f"Generated using: **{_engine}**")
 
     # High-impact score cards
     c1, c2, c3, c4 = st.columns(4)
@@ -327,24 +333,24 @@ if st.session_state.get("has_results", False):
         st.metric(
             label="Keyword Coverage",
             value=f"{o_audit['keyword_score']}%",
-            delta=f"+{o_audit['keyword_score'] - b_audit['keyword_score']}%"
+            delta=f"{o_audit['keyword_score'] - b_audit['keyword_score']}%"
         )
         st.metric(
             label="Semantic Fit",
             value=f"{o_audit['semantic_score']}%",
-            delta=f"+{o_audit['semantic_score'] - b_audit['semantic_score']}%"
+            delta=f"{o_audit['semantic_score'] - b_audit['semantic_score']}%"
         )
 
     with c4:
         st.metric(
             label="STAR Metrics & Impact",
             value=f"{o_audit['impact_score']}%",
-            delta=f"+{o_audit['impact_score'] - b_audit['impact_score']}%"
+            delta=f"{o_audit['impact_score'] - b_audit['impact_score']}%"
         )
         st.metric(
             label="ATS Format & Parsing",
             value=f"{o_audit['format_score']}%",
-            delta=f"+{o_audit['format_score'] - b_audit['format_score']}%"
+            delta=f"{o_audit['format_score'] - b_audit['format_score']}%"
         )
 
     # Keyword Tag Clouds
@@ -392,7 +398,7 @@ if st.session_state.get("has_results", False):
 
     # ----------------- EXPORTS -----------------
     st.markdown("---")
-    st.subheader("📥 Export ATS-Guaranteed Resume")
+    st.subheader("📥 Export ATS-Formatted Resume")
     st.caption("Standard single-column formatting engineered for Workday, Taleo, Greenhouse, and iCIMS parsers.")
     
     exp_col1, exp_col2, exp_col3 = st.columns(3)

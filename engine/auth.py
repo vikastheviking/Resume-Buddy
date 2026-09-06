@@ -8,7 +8,7 @@ import re
 import sqlite3
 import hashlib
 import secrets
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Tuple, Optional
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -55,12 +55,28 @@ def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
     return pw_hash, salt
 
 
+# Local part follows RFC 5322's common atom set. The previous pattern omitted '+', so
+# plus-addressed mailboxes (a+tag@mail.io) were rejected here even though the Node-side
+# validator accepts them — signups passed one layer and failed at the next.
+_EMAIL_PATTERN = re.compile(
+    r"^[a-zA-Z0-9!#$%&'*+/=?^_`{|}~.-]+"
+    r"@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+    r"(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)*"
+    r"\.[a-zA-Z]{2,}$"
+)
+
+
 def is_valid_email(email: str) -> bool:
-    """Basic email regex validation."""
-    if not email or len(email) > 120:
+    """Structural validation of an email address. Deliverability is checked in the Node layer."""
+    if not email:
         return False
-    pattern = r"^[\w\.-]+@[\w\.-]+\.\w{2,}$"
-    return bool(re.match(pattern, email.strip()))
+    candidate = email.strip()
+    if len(candidate) > 254:
+        return False
+    local, _, _ = candidate.partition("@")
+    if not local or len(local) > 64 or ".." in local or local.startswith(".") or local.endswith("."):
+        return False
+    return bool(_EMAIL_PATTERN.match(candidate))
 
 
 def signup_user(email: str, password: str) -> Tuple[bool, str]:
@@ -78,7 +94,7 @@ def signup_user(email: str, password: str) -> Tuple[bool, str]:
         return False, "Password must be at least 6 characters long."
 
     pw_hash, salt = hash_password(password)
-    created_at = datetime.utcnow().isoformat()
+    created_at = datetime.now(timezone.utc).isoformat()
 
     try:
         with get_db_connection() as conn:
@@ -91,6 +107,40 @@ def signup_user(email: str, password: str) -> Tuple[bool, str]:
         return True, "Account created successfully! You can now log in."
     except sqlite3.IntegrityError:
         return False, "An account with this email already exists. Please sign in."
+    except Exception as e:
+        return False, f"Registration error: {str(e)}"
+
+
+# Sentinel stored in password_hash for accounts that authenticate by OTP only.
+# login_user refuses these, so no password — however it was obtained — opens them.
+PASSWORDLESS = "!"
+
+
+def ensure_user(email: str) -> Tuple[bool, str]:
+    """
+    Register an email as a passwordless account, or confirm it already exists.
+
+    Used after OTP verification. These accounts carry no usable password hash: identity
+    is proven by controlling the mailbox, so there is nothing for a password check to
+    compare against and nothing an attacker can guess.
+    """
+    init_db()
+    email_clean = email.strip().lower()
+
+    if not is_valid_email(email_clean):
+        return False, "Please provide a valid email address."
+
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
+                (email_clean, PASSWORDLESS, "", datetime.now(timezone.utc).isoformat()),
+            )
+            conn.commit()
+        return True, "Account created."
+    except sqlite3.IntegrityError:
+        return True, "Account already exists."
     except Exception as e:
         return False, f"Registration error: {str(e)}"
 
@@ -116,6 +166,10 @@ def login_user(email: str, password: str) -> Tuple[bool, str]:
 
     stored_hash = user["password_hash"]
     salt = user["salt"]
+
+    if stored_hash == PASSWORDLESS:
+        return False, "This account signs in with an email verification code. Request a code instead."
+
     computed_hash, _ = hash_password(password, salt)
 
     if secrets.compare_digest(stored_hash, computed_hash):

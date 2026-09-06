@@ -1,11 +1,15 @@
 /**
- * Production Web Server for ATS Resume Architect.
- * Node.js (Express) with native HTTPS support, file upload handling,
- * and high-performance Python ASGI backend orchestration.
+ * Web server for Resume-Buddy.
+ *
+ * Serves the frontend, handles uploads and email/OTP auth, and supervises the Python
+ * ATS engine it proxies to. The engine listens on loopback only; this process is the
+ * sole public entry point.
  */
 
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -24,165 +28,300 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const PYTHON_PORT = process.env.PYTHON_PORT || 5001;
 const PYTHON_BASE_URL = `http://127.0.0.1:${PYTHON_PORT}`;
+const IS_PRODUCTION = process.env.NODE_ENV === 'production';
 
-// 1. Production Middleware
-app.use(cors());
-app.use(express.json({ limit: '15mb' }));
-app.use(express.urlencoded({ extended: true, limit: '15mb' }));
+// How long to wait on the engine. Optimization runs an LLM call, so it gets its own
+// budget; everything else should answer promptly.
+const ENGINE_TIMEOUT_MS = Number(process.env.ENGINE_TIMEOUT_MS || 20000);
+const OPTIMIZE_TIMEOUT_MS = Number(process.env.OPTIMIZE_TIMEOUT_MS || 120000);
 
-// Multer memory storage for resume uploads
-const upload = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 15 * 1024 * 1024 } // 15MB
-});
+const MAX_UPLOAD_BYTES = 8 * 1024 * 1024;
+const ALLOWED_UPLOAD_EXTENSIONS = new Set(['.pdf', '.docx', '.doc', '.txt', '.md']);
+const ALLOWED_UPLOAD_MIMETYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'text/plain',
+  'text/markdown',
+  'application/octet-stream', // browsers send this for .docx surprisingly often
+]);
 
-// Serve frontend static assets from /public
-app.use(express.static(path.join(ROOT_DIR, 'public'), {
-  maxAge: process.env.NODE_ENV === 'production' ? '1h' : '0'
+// ---------------------------------------------------------------------------
+// 1. Middleware
+// ---------------------------------------------------------------------------
+
+app.set('trust proxy', 1); // required for correct client IPs behind Render/Railway/Fly
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      // The markup carries inline style attributes; fonts come from Google Fonts.
+      styleSrc: ["'self'", 'https://fonts.googleapis.com', "'unsafe-inline'"],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:'],
+      connectSrc: ["'self'"],
+      objectSrc: ["'none'"],
+      frameAncestors: ["'none'"],
+      baseUri: ["'self'"],
+      formAction: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
 }));
 
-// 2. Python Backend Lifecycle Management
+// Same-origin by default. Set CORS_ORIGINS to a comma-separated allowlist to open it up.
+const corsOrigins = (process.env.CORS_ORIGINS || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+app.use(cors(corsOrigins.length ? { origin: corsOrigins, credentials: true } : { origin: false }));
+
+app.use(express.json({ limit: '2mb' }));
+app.use(express.urlencoded({ extended: true, limit: '2mb' }));
+
+class UploadRejected extends Error {}
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_UPLOAD_BYTES, files: 1 },
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname || '').toLowerCase();
+    if (!ALLOWED_UPLOAD_EXTENSIONS.has(ext)) {
+      return cb(new UploadRejected(`Unsupported file type "${ext || 'unknown'}". Upload a PDF, DOCX, or TXT file.`));
+    }
+    if (file.mimetype && !ALLOWED_UPLOAD_MIMETYPES.has(file.mimetype)) {
+      return cb(new UploadRejected('The uploaded file does not look like a document.'));
+    }
+    cb(null, true);
+  },
+});
+
+app.use(express.static(path.join(ROOT_DIR, 'public'), {
+  maxAge: IS_PRODUCTION ? '1h' : '0',
+}));
+
+// Rate limits. Optimization is the expensive path (it spends LLM tokens); OTP dispatch
+// sends real email. Both are limited per client IP, which the per-email cooldown in the
+// OTP service cannot do on its own.
+const rateLimitOptions = { standardHeaders: 'draft-7', legacyHeaders: false };
+
+const generalLimiter = rateLimit({
+  ...rateLimitOptions,
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  message: { error: 'Too many requests. Please slow down and try again shortly.' },
+});
+
+const optimizeLimiter = rateLimit({
+  ...rateLimitOptions,
+  windowMs: 15 * 60 * 1000,
+  limit: 20,
+  message: { error: 'Optimization limit reached. Please wait a few minutes before trying again.' },
+});
+
+const authLimiter = rateLimit({
+  ...rateLimitOptions,
+  windowMs: 15 * 60 * 1000,
+  limit: 15,
+  message: { success: false, error: 'Too many authentication attempts. Please wait a few minutes.' },
+});
+
+app.use('/api/', generalLimiter);
+
+// ---------------------------------------------------------------------------
+// 2. Python engine lifecycle
+// ---------------------------------------------------------------------------
+
 let pythonProcess = null;
+let shuttingDown = false;
+let restartAttempts = 0;
+
+/** fetch against the engine with a hard timeout, so a hung engine cannot pin a request. */
+async function engineFetch(pathname, options = {}, timeoutMs = ENGINE_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(`${PYTHON_BASE_URL}${pathname}`, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 async function checkPythonHealth() {
   try {
-    const res = await fetch(`${PYTHON_BASE_URL}/api/health`, { method: 'GET' });
-    if (res.ok) {
-      const data = await res.json();
-      return data.status === 'healthy';
-    }
-  } catch (err) {
+    const res = await engineFetch('/api/health', { method: 'GET' }, 3000);
+    if (!res.ok) return false;
+    const data = await res.json();
+    return data.status === 'healthy';
+  } catch {
     return false;
   }
-  return false;
 }
 
-function startPythonBackend() {
-  return new Promise(async (resolve) => {
-    const alreadyRunning = await checkPythonHealth();
-    if (alreadyRunning) {
-      console.log(`[Python Engine] Already active on port ${PYTHON_PORT}`);
-      return resolve(true);
-    }
+function spawnEngine() {
+  console.log(`[engine] launching engine.api on port ${PYTHON_PORT}...`);
+  // Run as a package module from the repo root so `engine.*` imports resolve.
+  pythonProcess = spawn(PYTHON_BIN, ['-m', 'engine.api'], {
+    cwd: ROOT_DIR,
+    env: { ...process.env, PYTHON_PORT: String(PYTHON_PORT), PYTHONUNBUFFERED: '1' },
+    stdio: 'pipe',
+  });
 
-    console.log(`[Python Engine] Launching engine.api on port ${PYTHON_PORT}...`);
-    // Run as a package module from the repo root so `engine.*` imports resolve.
-    pythonProcess = spawn(PYTHON_BIN, ['-m', 'engine.api'], {
-      cwd: ROOT_DIR,
-      env: { ...process.env, PYTHON_PORT: String(PYTHON_PORT) },
-      stdio: 'pipe'
-    });
+  pythonProcess.stdout.on('data', (d) => console.log(`[engine] ${d.toString().trim()}`));
+  pythonProcess.stderr.on('data', (d) => console.error(`[engine] ${d.toString().trim()}`));
 
-    pythonProcess.stdout.on('data', (data) => {
-      console.log(`[Python] ${data.toString().trim()}`);
-    });
+  pythonProcess.on('close', (code) => {
+    pythonProcess = null;
+    if (shuttingDown) return;
 
-    pythonProcess.stderr.on('data', (data) => {
-      console.error(`[Python Err] ${data.toString().trim()}`);
-    });
-
-    pythonProcess.on('close', (code) => {
-      console.log(`[Python Engine] Process exited with code ${code}`);
-    });
-
-    // Poll for readiness
-    let attempts = 0;
-    const interval = setInterval(async () => {
-      attempts++;
-      const isHealthy = await checkPythonHealth();
-      if (isHealthy) {
-        clearInterval(interval);
-        console.log(`[Python Engine] Successfully connected and ready!`);
-        resolve(true);
-      } else if (attempts > 30) {
-        clearInterval(interval);
-        console.warn(`[Python Engine] Failed to confirm readiness after 15 seconds.`);
-        resolve(false);
-      }
-    }, 500);
+    // Restart with backoff. Without this a single engine crash takes the app down until
+    // someone notices and restarts it by hand.
+    restartAttempts += 1;
+    const delay = Math.min(30000, 1000 * 2 ** (restartAttempts - 1));
+    console.error(`[engine] exited with code ${code}; restarting in ${delay}ms (attempt ${restartAttempts})`);
+    setTimeout(() => {
+      if (!shuttingDown) spawnEngine();
+    }, delay);
   });
 }
 
-// 3. API Routes
+async function startPythonBackend() {
+  if (await checkPythonHealth()) {
+    console.log(`[engine] already active on port ${PYTHON_PORT}`);
+    return true;
+  }
 
-// Health Check
+  spawnEngine();
+
+  for (let attempt = 0; attempt < 40; attempt += 1) {
+    await new Promise((r) => setTimeout(r, 500));
+    if (await checkPythonHealth()) {
+      restartAttempts = 0;
+      console.log('[engine] ready');
+      return true;
+    }
+  }
+
+  console.warn('[engine] did not become healthy within 20s; continuing to retry in the background');
+  return false;
+}
+
+// ---------------------------------------------------------------------------
+// 3. Helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Log the real error, return a safe one.
+ *
+ * Raw `err.message` values leak engine internals, file paths and dependency versions to
+ * anyone who can trigger an error, so they stay in the server log.
+ */
+function fail(res, status, publicMessage, err, shape = 'error') {
+  if (err) console.error(`[${status}] ${publicMessage}:`, err.message || err);
+  const body = shape === 'success'
+    ? { success: false, error: publicMessage }
+    : { error: publicMessage };
+  if (!IS_PRODUCTION && err) body.details = err.message || String(err);
+  return res.status(status).json(body);
+}
+
+/** Proxy a JSON request to the engine and relay its response verbatim. */
+async function proxyJson(res, pathname, payload, { timeoutMs = ENGINE_TIMEOUT_MS, label } = {}) {
+  const engineRes = await engineFetch(pathname, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  }, timeoutMs);
+
+  const text = await engineRes.text();
+  let data;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    console.error(`[${label}] engine returned non-JSON:`, text.slice(0, 300));
+    return res.status(502).json({ error: 'The optimization engine returned an unreadable response.' });
+  }
+  return res.status(engineRes.status).json(data);
+}
+
+function isAbort(err) {
+  return err && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
+
+// ---------------------------------------------------------------------------
+// 4. API routes
+// ---------------------------------------------------------------------------
+
 app.get('/api/health', async (req, res) => {
-  const pythonOk = await checkPythonHealth();
+  const engineOk = await checkPythonHealth();
   res.json({
     status: 'ok',
     server: 'Node.js Express',
     port: PORT,
-    engine: pythonOk ? 'online' : 'reconnecting'
+    engine: engineOk ? 'online' : 'reconnecting',
   });
 });
 
-// Sample Profile Data
 app.get('/api/sample', async (req, res) => {
   try {
-    const key = req.query.key || '';
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/sample?key=${encodeURIComponent(key)}`);
-    const data = await pyRes.json();
-    res.json(data);
+    const key = typeof req.query.key === 'string' ? req.query.key : '';
+    const engineRes = await engineFetch(`/api/sample?key=${encodeURIComponent(key)}`);
+    res.status(engineRes.status).json(await engineRes.json());
   } catch (err) {
-    res.status(500).json({ error: 'Failed to fetch sample data', details: err.message });
+    return fail(res, 502, 'Could not load sample data.', err);
   }
 });
 
-// Pre-flight Real Email Validation
-app.post('/api/auth/validate-email', async (req, res) => {
+app.post('/api/auth/validate-email', authLimiter, async (req, res) => {
   try {
-    const { email } = req.body;
+    const { email } = req.body || {};
     if (!email) {
       return res.status(400).json({ isValid: false, error: 'Email is required.' });
     }
-    const result = await verifyRealEmail(email);
-    res.json(result);
+    res.json(await verifyRealEmail(email));
   } catch (err) {
-    res.status(500).json({ isValid: false, error: err.message });
+    return fail(res, 500, 'Could not validate that email address.', err);
   }
 });
 
-// OTP: Send Verification Code
-app.post('/api/auth/send-otp', async (req, res) => {
+app.post('/api/auth/send-otp', authLimiter, async (req, res) => {
   try {
-    const { email, mode = 'signup' } = req.body;
+    const { email, mode = 'signup' } = req.body || {};
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email address is required.' });
     }
 
-    // 1. Strict Real Email Verification Check
     const verification = await verifyRealEmail(email);
     if (!verification.isValid) {
       return res.status(400).json({
         success: false,
         error: verification.error,
-        suggestion: verification.suggestion
+        suggestion: verification.suggestion,
       });
     }
 
     const cleanEmail = verification.cleanEmail || email.trim().toLowerCase();
-
-    // 2. Dispatch 6-digit OTP
-    const otpResult = await createAndSendOtp(cleanEmail, mode);
+    const otpResult = await createAndSendOtp(cleanEmail, mode === 'signin' ? 'signin' : 'signup');
     if (!otpResult.success) {
       return res.status(429).json(otpResult);
     }
 
     res.json({
       success: true,
-      message: otpResult.message || `Verification code sent to ${cleanEmail}. Check your inbox!`,
+      message: otpResult.message,
       email: cleanEmail,
-      mode
+      mode,
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return fail(res, 500, 'Could not send a verification code.', err, 'success');
   }
 });
 
-// OTP: Verify Code and Activate Account / Sign In
-app.post('/api/auth/verify-otp', async (req, res) => {
+app.post('/api/auth/verify-otp', authLimiter, async (req, res) => {
   try {
-    const { email, otp } = req.body;
+    const { email, otp } = req.body || {};
     if (!email || !otp) {
       return res.status(400).json({ success: false, error: 'Both email and 6-digit verification code are required.' });
     }
@@ -192,71 +331,59 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       return res.status(400).json({ success: false, error: verification.error });
     }
 
-    // Ensure user record exists in database
+    // Register the address as a passwordless account. It deliberately has no usable
+    // password: these users authenticate by OTP, and minting one with a shared literal
+    // password would let anyone holding that string sign in as any of them.
     try {
-      await fetch(`${PYTHON_BASE_URL}/api/auth/signup`, {
+      await engineFetch('/api/auth/ensure-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verification.email, password: 'OTP_VERIFIED_SECURE_AUTH' })
+        body: JSON.stringify({ email: verification.email }),
       });
     } catch (err) {
-      // User may already exist, ignore
+      console.error('[auth] could not persist OTP-verified user:', err.message);
     }
 
     res.json({
       success: true,
-      message: 'Email successfully verified!',
+      message: 'Email successfully verified.',
       email: verification.email,
-      mode: verification.mode
+      mode: verification.mode,
     });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return fail(res, 500, 'Could not verify that code.', err, 'success');
   }
 });
 
-// Authentication: Sign Up with Strict 5-Layer Real Email Verification
-app.post('/api/auth/signup', async (req, res) => {
+app.post('/api/auth/signup', authLimiter, async (req, res) => {
   try {
-    const { email, password } = req.body;
-
-    // Strict Real Email Verification Check
+    const { email, password } = req.body || {};
     const verification = await verifyRealEmail(email);
     if (!verification.isValid) {
       return res.status(400).json({
         success: false,
         error: verification.error,
-        suggestion: verification.suggestion
+        suggestion: verification.suggestion,
       });
     }
-
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/auth/signup`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email: verification.cleanEmail || email, password })
-    });
-    const data = await pyRes.json();
-    res.status(pyRes.status).json(data);
+    return await proxyJson(res, '/api/auth/signup', {
+      email: verification.cleanEmail || email,
+      password,
+    }, { label: 'signup' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return fail(res, 502, 'Could not create that account.', err, 'success');
   }
 });
 
-// Authentication: Login
-app.post('/api/auth/login', async (req, res) => {
+app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/auth/login`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body)
-    });
-    const data = await pyRes.json();
-    res.status(pyRes.status).json(data);
+    const { email, password } = req.body || {};
+    return await proxyJson(res, '/api/auth/login', { email, password }, { label: 'login' });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    return fail(res, 502, 'Could not sign you in.', err, 'success');
   }
 });
 
-// Upload & Extract Resume File
 app.post('/api/upload', upload.single('file'), async (req, res) => {
   try {
     if (!req.file) {
@@ -267,148 +394,160 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'application/octet-stream' });
     formData.append('file', blob, req.file.originalname);
 
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/extract`, {
-      method: 'POST',
-      body: formData
-    });
-
-    if (!pyRes.ok) {
-      const errData = await pyRes.json();
-      return res.status(pyRes.status).json(errData);
-    }
-
-    const data = await pyRes.json();
-    res.json(data);
+    const engineRes = await engineFetch('/api/extract', { method: 'POST', body: formData });
+    const data = await engineRes.json();
+    return res.status(engineRes.status).json(data);
   } catch (err) {
-    console.error('Upload handler error:', err);
-    res.status(500).json({ error: 'Extraction service error', details: err.message });
+    if (isAbort(err)) {
+      return fail(res, 504, 'Text extraction timed out. Try a smaller file.', err);
+    }
+    return fail(res, 502, 'Could not extract text from that file.', err);
   }
 });
 
-// ATS Optimization (Actual Score + Llama-3.3-70B Star Metrics + Updated Score)
-app.post('/api/optimize', async (req, res) => {
+app.post('/api/optimize', optimizeLimiter, async (req, res) => {
   try {
-    const { resume_text, jd_text } = req.body;
-    if (!resume_text || !jd_text) {
+    const { resume_text: resumeText, jd_text: jdText } = req.body || {};
+    if (!resumeText || !jdText) {
       return res.status(400).json({ error: 'Both resume_text and jd_text are required.' });
     }
-
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/optimize`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resume_text, jd_text })
-    });
-
-    if (!pyRes.ok) {
-      const errText = await pyRes.text();
-      return res.status(pyRes.status).json({ error: errText });
-    }
-
-    const data = await pyRes.json();
-    res.json(data);
+    return await proxyJson(
+      res,
+      '/api/optimize',
+      { resume_text: resumeText, jd_text: jdText },
+      { timeoutMs: OPTIMIZE_TIMEOUT_MS, label: 'optimize' },
+    );
   } catch (err) {
-    console.error('Optimization error:', err);
-    res.status(500).json({ error: 'Optimization service error', details: err.message });
+    if (isAbort(err)) {
+      return fail(res, 504, 'Optimization timed out. Please try again.', err);
+    }
+    return fail(res, 502, 'The optimization engine is unavailable.', err);
   }
 });
 
-// Export PDF
-app.post('/api/export/pdf', async (req, res) => {
-  try {
-    const { markdown_text } = req.body;
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/export/pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markdown_text })
-    });
+/** PDF and DOCX exports differ only in route, media type and filename. */
+function registerExport(route, enginePath, mediaType, filename) {
+  app.post(route, async (req, res) => {
+    try {
+      const { markdown_text: markdownText } = req.body || {};
+      if (!markdownText || !markdownText.trim()) {
+        return res.status(400).json({ error: 'markdown_text is required.' });
+      }
 
-    if (!pyRes.ok) {
-      return res.status(pyRes.status).send('Failed to generate PDF');
+      const engineRes = await engineFetch(enginePath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ markdown_text: markdownText }),
+      }, 45000);
+
+      if (!engineRes.ok) {
+        return res.status(engineRes.status).json({ error: 'Document generation failed.' });
+      }
+
+      res.setHeader('Content-Type', mediaType);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+      res.send(Buffer.from(await engineRes.arrayBuffer()));
+    } catch (err) {
+      if (isAbort(err)) {
+        return fail(res, 504, 'Document generation timed out.', err);
+      }
+      return fail(res, 502, 'Document generation failed.', err);
     }
+  });
+}
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', 'attachment; filename="ATS_Optimized_Resume.pdf"');
-    const buffer = Buffer.from(await pyRes.arrayBuffer());
-    res.send(buffer);
-  } catch (err) {
-    res.status(500).json({ error: 'PDF export failed', details: err.message });
-  }
+registerExport('/api/export/pdf', '/api/export/pdf', 'application/pdf', 'ATS_Optimized_Resume.pdf');
+registerExport(
+  '/api/export/docx',
+  '/api/export/docx',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'ATS_Optimized_Resume.docx',
+);
+
+// Unknown API routes must not fall through to the SPA shell: an XHR expecting JSON
+// should get a JSON 404, not a page of HTML.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `Unknown API endpoint: ${req.method} /api${req.path}` });
 });
 
-// Export DOCX
-app.post('/api/export/docx', async (req, res) => {
-  try {
-    const { markdown_text } = req.body;
-    const pyRes = await fetch(`${PYTHON_BASE_URL}/api/export/docx`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ markdown_text })
-    });
-
-    if (!pyRes.ok) {
-      return res.status(pyRes.status).send('Failed to generate DOCX');
-    }
-
-    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', 'attachment; filename="ATS_Optimized_Resume.docx"');
-    const buffer = Buffer.from(await pyRes.arrayBuffer());
-    res.send(buffer);
-  } catch (err) {
-    res.status(500).json({ error: 'DOCX export failed', details: err.message });
-  }
-});
-
-// Fallback to index.html for SPA routing
+// SPA fallback for everything else.
 app.get('*', (req, res) => {
   res.sendFile(path.join(ROOT_DIR, 'public', 'index.html'));
 });
 
-// 4. Server Initialization (HTTP & HTTPS)
+// Multer and body-parser surface their own errors; translate them into clean JSON.
+app.use((err, req, res, next) => {
+  if (err instanceof UploadRejected) {
+    return res.status(415).json({ error: err.message });
+  }
+  if (err && err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: `File is too large. The maximum size is ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB.` });
+  }
+  if (err && err.type === 'entity.too.large') {
+    return res.status(413).json({ error: 'Request body is too large.' });
+  }
+  if (res.headersSent) return next(err);
+  return fail(res, 500, 'Unexpected server error.', err);
+});
+
+// ---------------------------------------------------------------------------
+// 5. Startup and shutdown
+// ---------------------------------------------------------------------------
+
+const servers = [];
+
 async function startServer() {
   await startPythonBackend();
 
-  // Standard HTTP Server
   const httpServer = http.createServer(app);
+  servers.push(httpServer);
   httpServer.listen(PORT, () => {
-    console.log(`====================================================`);
-    console.log(`🚀 ATS Resume Architect Web Application`);
-    console.log(`📡 Local Web URL:  http://localhost:${PORT}`);
-    console.log(`⚙️  Python Engine:  http://127.0.0.1:${PYTHON_PORT}`);
-    console.log(`🌐 Public Tunnel:  Run 'npm run tunnel' for live internet link`);
-    console.log(`====================================================`);
+    console.log('====================================================');
+    console.log(' Resume-Buddy — ATS Resume Architect');
+    console.log(` Web:    http://localhost:${PORT}`);
+    console.log(` Engine: http://127.0.0.1:${PYTHON_PORT}`);
+    console.log('====================================================');
   });
 
-  // Optional HTTPS Server
   const sslKeyPath = process.env.SSL_KEY_PATH || path.join(ROOT_DIR, 'cert', 'key.pem');
   const sslCertPath = process.env.SSL_CERT_PATH || path.join(ROOT_DIR, 'cert', 'cert.pem');
   const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 
   if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {
     try {
-      const httpsOptions = {
-        key: fs.readFileSync(sslKeyPath),
-        cert: fs.readFileSync(sslCertPath)
-      };
-      const httpsServer = https.createServer(httpsOptions, app);
+      const httpsServer = https.createServer(
+        { key: fs.readFileSync(sslKeyPath), cert: fs.readFileSync(sslCertPath) },
+        app,
+      );
+      servers.push(httpsServer);
       httpsServer.listen(HTTPS_PORT, () => {
-        console.log(`🔒 Local HTTPS URL: https://localhost:${HTTPS_PORT}`);
+        console.log(` HTTPS:  https://localhost:${HTTPS_PORT}`);
       });
     } catch (err) {
-      console.warn(`[HTTPS] Failed to initialize SSL certificates:`, err.message);
+      console.warn('[https] could not initialise TLS:', err.message);
     }
   }
 }
 
-// Graceful Shutdown
-function handleShutdown() {
-  console.log('\nShutting down ATS Resume Architect server...');
+function handleShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  console.log(`\n[shutdown] received ${signal}, stopping...`);
+
+  servers.forEach((s) => s.close());
   if (pythonProcess) {
     pythonProcess.kill();
+    // The engine gets a moment to exit cleanly before the process goes away.
+    setTimeout(() => {
+      if (pythonProcess) pythonProcess.kill('SIGKILL');
+      process.exit(0);
+    }, 2000).unref();
+  } else {
+    process.exit(0);
   }
-  process.exit(0);
 }
 
-process.on('SIGINT', handleShutdown);
-process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', () => handleShutdown('SIGINT'));
+process.on('SIGTERM', () => handleShutdown('SIGTERM'));
 
 startServer();

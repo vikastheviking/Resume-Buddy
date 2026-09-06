@@ -26,6 +26,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const updatedScoreBar = document.getElementById('updated-score-bar');
   const scoreBoostBadge = document.getElementById('score-boost-badge');
   const resumePreview = document.getElementById('resume-preview');
+  const auditDetail = document.getElementById('audit-detail');
   const copyBtn = document.getElementById('copy-btn');
   const downloadPdfBtn = document.getElementById('download-pdf-btn');
   const downloadDocxBtn = document.getElementById('download-docx-btn');
@@ -88,7 +89,7 @@ document.addEventListener('DOMContentLoaded', () => {
     if (user) {
       authNavContainer.innerHTML = `
         <div class="user-badge-wrap">
-          <div class="user-badge" title="${user}">👤 ${user}</div>
+          <div class="user-badge" title="${escapeHtml(user)}">👤 ${escapeHtml(user)}</div>
           <button id="signout-btn" class="btn btn-secondary btn-sm">Sign Out</button>
         </div>
       `;
@@ -568,6 +569,80 @@ document.addEventListener('DOMContentLoaded', () => {
     return html;
   }
 
+  /**
+   * Show the evidence behind the score: which job-description terms the rewrite picked
+   * up, which are still absent, and any ATS formatting problems the scorer flagged.
+   *
+   * Without this the user sees a bare number and has to take it on trust.
+   */
+  function renderAuditDetail(audit) {
+    if (!auditDetail) return;
+    if (!audit) {
+      auditDetail.classList.add('hidden');
+      return;
+    }
+
+    const chips = (items) => items
+      .map((k) => `<span class="kw-chip">${escapeHtml(k)}</span>`)
+      .join('');
+
+    const injected = Array.isArray(audit.injected_keywords) ? audit.injected_keywords : [];
+    const alerts = Array.isArray(audit.format_alerts) ? audit.format_alerts : [];
+    const blocks = [];
+
+    blocks.push(`
+      <div class="audit-row">
+        <span class="audit-label">Score breakdown</span>
+        <span class="audit-value">
+          Keywords ${audit.keyword_score}% &middot;
+          Semantic ${audit.semantic_score}% &middot;
+          Impact ${audit.impact_score}% &middot;
+          Format ${audit.format_score}%
+        </span>
+      </div>
+    `);
+
+    blocks.push(`
+      <div class="audit-row">
+        <span class="audit-label">Keyword coverage</span>
+        <span class="audit-value">${audit.matched_count} matched, ${audit.missing_count} still missing</span>
+      </div>
+    `);
+
+    if (injected.length) {
+      blocks.push(`
+        <div class="audit-row">
+          <span class="audit-label">Newly covered</span>
+          <span class="audit-value">${chips(injected)}</span>
+        </div>
+      `);
+    }
+
+    if (alerts.length) {
+      blocks.push(`
+        <div class="audit-row">
+          <span class="audit-label">Formatting</span>
+          <span class="audit-value">${alerts.map((a) => escapeHtml(a)).join(' ')}</span>
+        </div>
+      `);
+    }
+
+    if (audit.engine_used && audit.engine_used.startsWith('structural')) {
+      blocks.push(`
+        <div class="audit-row audit-note">
+          <span class="audit-label">Note</span>
+          <span class="audit-value">
+            Formatting was cleaned up, but no AI rewrite ran (${escapeHtml(audit.engine_used)}).
+            Wording and keyword coverage are unchanged from your original.
+          </span>
+        </div>
+      `);
+    }
+
+    auditDetail.innerHTML = blocks.join('');
+    auditDetail.classList.remove('hidden');
+  }
+
   function escapeHtml(text) {
     const div = document.createElement('div');
     div.textContent = text;
@@ -644,10 +719,12 @@ document.addEventListener('DOMContentLoaded', () => {
       // Show Results Section
       resultsSection.classList.remove('hidden');
 
-      // Animate Actual ATS Score vs Updated ATS Score
+      // Animate Actual ATS Score vs Updated ATS Score.
+      // These are measurements, not targets: report whatever the scorer returned,
+      // including a flat or negative movement.
       const actual = Math.round(data.actual_score);
       const updated = Math.round(data.updated_score);
-      const boost = Math.max(0, updated - actual);
+      const boost = updated - actual;
 
       animateScore(actualScoreNum, actual);
       actualScoreBar.style.width = `${actual}%`;
@@ -655,14 +732,30 @@ document.addEventListener('DOMContentLoaded', () => {
       animateScore(updatedScoreNum, updated);
       updatedScoreBar.style.width = `${updated}%`;
 
-      scoreBoostBadge.textContent = `+${boost}% Score Boost`;
+      if (boost > 0) {
+        scoreBoostBadge.textContent = `+${boost}% ATS score`;
+        scoreBoostBadge.classList.remove('is-neutral', 'is-negative');
+      } else if (boost === 0) {
+        scoreBoostBadge.textContent = 'No score change';
+        scoreBoostBadge.classList.add('is-neutral');
+        scoreBoostBadge.classList.remove('is-negative');
+      } else {
+        scoreBoostBadge.textContent = `${boost}% ATS score`;
+        scoreBoostBadge.classList.add('is-negative');
+        scoreBoostBadge.classList.remove('is-neutral');
+      }
 
       // Render Result Resume
       resumePreview.innerHTML = renderATSMarkdown(data.optimized_resume);
+      renderAuditDetail(data.optimized_audit);
 
       // Smooth scroll to results
       resultsSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      showToast('🎉 Resume successfully optimized to 95%+ ATS score!');
+      showToast(
+        boost > 0
+          ? `Resume rewritten. ATS score ${actual}% → ${updated}%.`
+          : `Resume rewritten. ATS score is ${updated}%.`
+      );
     } catch (err) {
       console.error('Optimization error:', err);
       showToast(`⚠️ Optimization failed: ${err.message}`);

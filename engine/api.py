@@ -5,7 +5,6 @@ Provides endpoints for text extraction, ATS scoring, Llama-3.3-70B optimization,
 """
 
 import os
-import json
 import logging
 from typing import Dict, Any
 
@@ -22,10 +21,12 @@ from engine.optimizer import optimize_resume
 from engine.exporter import generate_ats_pdf, generate_ats_docx
 from engine.sample_data import SAMPLE_JOBS
 from engine.llm_client import BackendLLMClient
-from engine.auth import login_user, signup_user, is_valid_email
+from engine.auth import login_user, signup_user, ensure_user
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ats-api")
+
+_SAFE_ERROR = "The engine could not complete that request."
 
 
 async def health_check(request: Request) -> JSONResponse:
@@ -65,7 +66,7 @@ async def extract_file(request: Request) -> JSONResponse:
         })
     except Exception as e:
         logger.error(f"Extraction error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
 async def score_resume(request: Request) -> JSONResponse:
@@ -82,7 +83,21 @@ async def score_resume(request: Request) -> JSONResponse:
         return JSONResponse(audit)
     except Exception as e:
         logger.error(f"Scoring error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
+
+
+def _audit_summary(audit: Dict[str, Any]) -> Dict[str, Any]:
+    """Project a scorer audit onto the fields the API exposes, using the scorer's own keys."""
+    return {
+        "overall_score": audit.get("overall_score", 0),
+        "keyword_score": audit.get("keyword_score", 0),
+        "semantic_score": audit.get("semantic_score", 0),
+        "impact_score": audit.get("impact_score", 0),
+        "format_score": audit.get("format_score", 0),
+        "matched_count": len(audit.get("matched_keywords", [])),
+        "missing_count": len(audit.get("missing_keywords", [])),
+        "format_alerts": audit.get("format_alerts", []),
+    }
 
 
 async def optimize_endpoint(request: Request) -> JSONResponse:
@@ -117,27 +132,18 @@ async def optimize_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({
             "actual_score": actual_score,
             "updated_score": updated_score,
-            "score_boost": max(0, updated_score - actual_score),
-            "baseline_audit": {
-                "overall_score": actual_score,
-                "keyword_match_score": baseline_audit.get("keyword_match_score", 0),
-                "semantic_score": baseline_audit.get("semantic_score", 0),
-                "formatting_score": baseline_audit.get("formatting_score", 0),
-                "matched_count": len(baseline_audit.get("matched_keywords", [])),
-                "missing_count": len(baseline_audit.get("missing_keywords", []))
-            },
+            "score_boost": updated_score - actual_score,
+            "baseline_audit": _audit_summary(baseline_audit),
             "optimized_audit": {
-                "overall_score": updated_score,
-                "keyword_match_score": optimized_audit.get("keyword_match_score", 0),
-                "semantic_score": optimized_audit.get("semantic_score", 0),
-                "formatting_score": optimized_audit.get("formatting_score", 0),
-                "injected_keywords": optimized_audit.get("injected_keywords", [])
+                **_audit_summary(optimized_audit),
+                "injected_keywords": optimized_audit.get("injected_keywords", []),
+                "engine_used": optimized_audit.get("engine_used", ""),
             },
             "optimized_resume": optimized_resume
         })
     except Exception as e:
         logger.error(f"Optimization error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
 async def export_pdf(request: Request) -> Response:
@@ -156,7 +162,7 @@ async def export_pdf(request: Request) -> Response:
         )
     except Exception as e:
         logger.error(f"PDF export error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
 async def export_docx(request: Request) -> Response:
@@ -175,7 +181,7 @@ async def export_docx(request: Request) -> Response:
         )
     except Exception as e:
         logger.error(f"DOCX export error: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
 async def auth_signup(request: Request) -> JSONResponse:
@@ -191,7 +197,7 @@ async def auth_signup(request: Request) -> JSONResponse:
             return JSONResponse({"success": False, "error": message}, status_code=400)
     except Exception as e:
         logger.error(f"Auth signup error: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": _SAFE_ERROR}, status_code=500)
 
 
 async def auth_login(request: Request) -> JSONResponse:
@@ -207,11 +213,30 @@ async def auth_login(request: Request) -> JSONResponse:
             return JSONResponse({"success": False, "error": message}, status_code=400)
     except Exception as e:
         logger.error(f"Auth login error: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+        return JSONResponse({"success": False, "error": _SAFE_ERROR}, status_code=500)
+
+
+async def auth_ensure_user(request: Request) -> JSONResponse:
+    """
+    Register an OTP-verified email as a passwordless account.
+
+    Called by the Node layer once a one-time code checks out. Loopback-only, like the
+    rest of this service.
+    """
+    try:
+        body = await request.json()
+        email = body.get("email", "").strip()
+        success, message = ensure_user(email)
+        status = 200 if success else 400
+        return JSONResponse({"success": success, "message": message, "email": email.lower()}, status_code=status)
+    except Exception as e:
+        logger.error(f"Auth ensure-user error: {e}", exc_info=True)
+        return JSONResponse({"success": False, "error": "Could not register that account."}, status_code=500)
 
 
 routes = [
     Route("/api/health", health_check, methods=["GET"]),
+    Route("/api/auth/ensure-user", auth_ensure_user, methods=["POST"]),
     Route("/api/sample", get_sample_data, methods=["GET"]),
     Route("/api/extract", extract_file, methods=["POST"]),
     Route("/api/score", score_resume, methods=["POST"]),
@@ -222,12 +247,15 @@ routes = [
     Route("/api/auth/login", auth_login, methods=["POST"]),
 ]
 
+# This service binds to loopback and is reached only by the Node server process, so no
+# browser origin ever calls it. CORS is configurable purely for local debugging.
+_CORS_ORIGINS = [o for o in os.environ.get("ENGINE_CORS_ORIGINS", "").split(",") if o.strip()]
 middleware = [
     Middleware(
         CORSMiddleware,
-        allow_origins=["*"],
-        allow_methods=["*"],
-        allow_headers=["*"],
+        allow_origins=_CORS_ORIGINS,
+        allow_methods=["POST", "GET"],
+        allow_headers=["Content-Type"],
     )
 ]
 

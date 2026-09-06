@@ -524,6 +524,72 @@ body {
   white-space: nowrap;
 }
 
+/* A rewrite that does not move the score says so, rather than showing a fake gain. */
+.boost-badge.is-neutral {
+  background: var(--gray-100);
+  color: var(--gray-600);
+}
+
+.boost-badge.is-negative {
+  background: var(--danger-bg);
+  color: #b91c1c;
+}
+
+/* Score breakdown: the evidence behind the headline numbers. */
+.audit-detail {
+  margin: 0 0 1.25rem;
+  padding: 1rem 1.15rem;
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+
+.audit-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem 0.85rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+
+.audit-label {
+  flex: 0 0 8.5rem;
+  font-weight: 700;
+  color: var(--gray-700);
+}
+
+.audit-value {
+  flex: 1 1 14rem;
+  min-width: 0;
+  color: var(--gray-600);
+}
+
+.audit-note .audit-value {
+  color: var(--gray-700);
+}
+
+.kw-chip {
+  display: inline-block;
+  margin: 0 0.3rem 0.3rem 0;
+  padding: 2px 9px;
+  background: var(--success-bg);
+  color: var(--success-dark);
+  border: 1px solid #a7f3d0;
+  border-radius: 999px;
+  font-size: 0.78rem;
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .audit-label {
+    flex-basis: 100%;
+  }
+}
+
 /* Result Resume Card */
 .result-card {
   background: #ffffff;

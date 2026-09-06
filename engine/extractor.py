@@ -6,7 +6,7 @@ Software, Healthcare, Business, Finance, etc.
 
 import io
 import re
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any
 
 try:
     from pypdf import PdfReader
@@ -109,6 +109,9 @@ def extract_candidate_metadata(text: str) -> Dict[str, Any]:
             continue
         if re.search(r"^(resume|curriculum|cv|summary|contact|profile)", line_clean, re.IGNORECASE):
             continue
+        # Skip profile links and address lines; they sit next to the name but are not it.
+        if re.search(r"https?://|linkedin\.com|github\.com|www\.", line_clean, re.IGNORECASE):
+            continue
         if len(line_clean) < 60:
             name_candidates.append(line_clean)
             
@@ -119,12 +122,19 @@ def extract_candidate_metadata(text: str) -> Dict[str, Any]:
     email_match = re.search(r"[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+", text)
     email = email_match.group(0) if email_match else ""
 
-    # 3. Phone Detection (handles Indian +91, international, and US formats)
-    phone_match = re.search(r"(\+?\d{1,3}[-.\s]?)?(\(?\d{3,5}\)?[-.\s]?)?\d{3,5}[-.\s]?\d{3,5}", text)
-    phone = phone_match.group(0).strip() if phone_match else ""
-    # Validate phone length
-    if len(re.sub(r"\D", "", phone)) < 7:
-        phone = ""
+    # 3. Phone Detection (handles Indian +91, international, and US formats).
+    # Scoped to the contact header: scanning the whole document picks up CGPAs, date
+    # ranges and equipment ratings before it ever reaches the real number.
+    header_text = "\n".join(lines[:8])
+    phone = ""
+    for candidate in re.finditer(
+        r"\+?\d[\d\s().-]{7,17}\d",
+        header_text,
+    ):
+        digits = re.sub(r"\D", "", candidate.group(0))
+        if 7 <= len(digits) <= 15:
+            phone = candidate.group(0).strip(" .-")
+            break
 
     # 4. LinkedIn Detection
     linkedin_match = re.search(r"(https?://)?(www\.)?linkedin\.com/in/[a-zA-Z0-9_-]+", text, re.IGNORECASE)

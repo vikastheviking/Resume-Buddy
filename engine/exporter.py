@@ -1,12 +1,11 @@
 """
 ATS-Compliant Document Exporters.
-Generates single-column, standard-margin PDF and DOCX files guaranteed
-to parse cleanly through legacy and modern ATS systems (Workday, Taleo, Greenhouse).
+Generates single-column, standard-margin PDF and DOCX files structured to parse
+cleanly through common ATS systems (Workday, Taleo, Greenhouse).
 """
 
 import io
 import re
-from typing import Optional
 
 try:
     from reportlab.lib.pagesizes import letter

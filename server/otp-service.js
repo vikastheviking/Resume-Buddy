@@ -9,7 +9,36 @@ const nodemailer = require('nodemailer');
 require('dotenv').config();
 
 // In-memory OTP store: email -> { otp, expiresAt, attempts, lastSentAt, mode }
+//
+// Single-process only: codes issued by one instance are unknown to another, so running
+// more than one replica needs a shared store (Redis) instead.
 const otpStore = new Map();
+
+const OTP_TTL_MS = 10 * 60 * 1000;
+const RESEND_COOLDOWN_MS = 45 * 1000;
+const MAX_ATTEMPTS = 5;
+const MAX_PENDING_CODES = 10000;
+const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+/**
+ * Drop expired codes.
+ *
+ * Entries were previously only removed when someone tried to use them, so codes that
+ * were requested and abandoned accumulated for the lifetime of the process.
+ */
+function sweepExpiredOtps(now = Date.now()) {
+  let removed = 0;
+  for (const [email, record] of otpStore) {
+    if (now > record.expiresAt) {
+      otpStore.delete(email);
+      removed += 1;
+    }
+  }
+  return removed;
+}
+
+const sweepTimer = setInterval(sweepExpiredOtps, SWEEP_INTERVAL_MS);
+sweepTimer.unref(); // never hold the process open just for the sweep
 
 // 1. SMTP Transporter Configuration
 let transporter = null;
@@ -137,10 +166,11 @@ async function createAndSendOtp(email, mode = 'signup') {
   const cleanEmail = email.trim().toLowerCase();
   const existing = otpStore.get(cleanEmail);
 
-  // Rate-limiting: Minimum 45 seconds between requests
+  // Per-address cooldown. This cannot bound an attacker cycling through many different
+  // addresses, which is why the HTTP layer also rate-limits by client IP.
   const now = Date.now();
-  if (existing && (now - existing.lastSentAt) < 45000) {
-    const waitSeconds = Math.ceil((45000 - (now - existing.lastSentAt)) / 1000);
+  if (existing && (now - existing.lastSentAt) < RESEND_COOLDOWN_MS) {
+    const waitSeconds = Math.ceil((RESEND_COOLDOWN_MS - (now - existing.lastSentAt)) / 1000);
     return {
       success: false,
       error: `Please wait ${waitSeconds} seconds before requesting a new verification code.`,
@@ -148,9 +178,20 @@ async function createAndSendOtp(email, mode = 'signup') {
     };
   }
 
-  // Generate cryptographically secure 6-digit code (100000 - 999999)
-  const otp = String(crypto.randomInt(100000, 999999));
-  const expiresAt = now + 10 * 60 * 1000; // 10 minutes
+  if (otpStore.size >= MAX_PENDING_CODES) {
+    sweepExpiredOtps(now);
+    if (otpStore.size >= MAX_PENDING_CODES) {
+      return {
+        success: false,
+        error: 'The verification service is busy. Please try again in a few minutes.'
+      };
+    }
+  }
+
+  // Cryptographically secure 6-digit code. randomInt's upper bound is exclusive, so the
+  // ceiling is 1000000 for the range to actually include 999999.
+  const otp = String(crypto.randomInt(100000, 1000000));
+  const expiresAt = now + OTP_TTL_MS;
 
   otpStore.set(cleanEmail, {
     otp,
@@ -194,7 +235,7 @@ function verifyOtp(email, inputOtp) {
     };
   }
 
-  if (record.attempts >= 5) {
+  if (record.attempts >= MAX_ATTEMPTS) {
     otpStore.delete(cleanEmail);
     return {
       isValid: false,
@@ -202,13 +243,17 @@ function verifyOtp(email, inputOtp) {
     };
   }
 
-  // Compare OTP using constant-time comparison
+  // Constant-time comparison. timingSafeEqual throws on a length mismatch, and a 6-
+  // character input can still be more than 6 bytes (full-width digits, emoji), so the
+  // byte lengths are compared before handing the buffers over.
   const cleanInput = String(inputOtp).trim();
-  const isMatch = (cleanInput.length === 6) && crypto.timingSafeEqual(Buffer.from(record.otp), Buffer.from(cleanInput));
+  const expected = Buffer.from(record.otp, 'utf8');
+  const supplied = Buffer.from(cleanInput, 'utf8');
+  const isMatch = expected.length === supplied.length && crypto.timingSafeEqual(expected, supplied);
 
   if (!isMatch) {
     record.attempts += 1;
-    const remaining = 5 - record.attempts;
+    const remaining = MAX_ATTEMPTS - record.attempts;
     return {
       isValid: false,
       error: `Incorrect verification code. ${remaining} attempt(s) remaining.`
