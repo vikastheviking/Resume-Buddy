@@ -2,11 +2,7 @@
 Unit tests for auth.py
 """
 
-import os
-import sys
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from auth import init_db, signup_user, login_user, is_valid_email, get_total_users
+from engine.auth import init_db, signup_user, login_user, is_valid_email, get_total_users
 
 def run_tests():
     print("=== Testing Authentication Module ===")

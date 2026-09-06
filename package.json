@@ -1,12 +1,17 @@
 {
-  "name": "ats-resume-architect",
+  "name": "resume-buddy",
   "version": "2.0.0",
-  "description": "Production ATS Resume Architect & 95%+ Optimizer Web Application",
-  "main": "server.js",
+  "description": "ATS Resume Architect & Optimizer — Node.js web server fronting a Python resume-optimization engine",
+  "main": "server/index.js",
   "scripts": {
-    "start": "node server.js",
-    "dev": "node server.js",
+    "start": "node server/index.js",
+    "dev": "node server/index.js",
+    "test": "node tests/email-validator.test.js",
     "tunnel": "npx localtunnel --port 3000 --subdomain ats-resume-architect"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vikastheviking/Resume-Buddy.git"
   },
   "keywords": [
     "ats",
@@ -16,8 +21,11 @@
     "llama3",
     "groq"
   ],
-  "author": "Google DeepMind Advanced Agentic Coding",
+  "author": "vikastheviking",
   "license": "MIT",
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",

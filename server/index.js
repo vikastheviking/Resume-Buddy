@@ -12,9 +12,13 @@ const http = require('http');
 const https = require('https');
 const multer = require('multer');
 const { spawn } = require('child_process');
-const { verifyRealEmail } = require('./email_validator');
-const { createAndSendOtp, verifyOtp } = require('./otp_service');
+const { verifyRealEmail } = require('./email-validator');
+const { createAndSendOtp, verifyOtp } = require('./otp-service');
 require('dotenv').config();
+
+// Repo root: this file lives in server/, everything else resolves from one level up.
+const ROOT_DIR = path.join(__dirname, '..');
+const PYTHON_BIN = process.env.PYTHON_BIN || 'python';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -33,7 +37,7 @@ const upload = multer({
 });
 
 // Serve frontend static assets from /public
-app.use(express.static(path.join(__dirname, 'public'), {
+app.use(express.static(path.join(ROOT_DIR, 'public'), {
   maxAge: process.env.NODE_ENV === 'production' ? '1h' : '0'
 }));
 
@@ -61,9 +65,10 @@ function startPythonBackend() {
       return resolve(true);
     }
 
-    console.log(`[Python Engine] Launching api_backend.py on port ${PYTHON_PORT}...`);
-    const scriptPath = path.join(__dirname, 'api_backend.py');
-    pythonProcess = spawn('python', [scriptPath], {
+    console.log(`[Python Engine] Launching engine.api on port ${PYTHON_PORT}...`);
+    // Run as a package module from the repo root so `engine.*` imports resolve.
+    pythonProcess = spawn(PYTHON_BIN, ['-m', 'engine.api'], {
+      cwd: ROOT_DIR,
       env: { ...process.env, PYTHON_PORT: String(PYTHON_PORT) },
       stdio: 'pipe'
     });
@@ -355,7 +360,7 @@ app.post('/api/export/docx', async (req, res) => {
 
 // Fallback to index.html for SPA routing
 app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'public', 'index.html'));
+  res.sendFile(path.join(ROOT_DIR, 'public', 'index.html'));
 });
 
 // 4. Server Initialization (HTTP & HTTPS)
@@ -374,8 +379,8 @@ async function startServer() {
   });
 
   // Optional HTTPS Server
-  const sslKeyPath = process.env.SSL_KEY_PATH || path.join(__dirname, 'cert', 'key.pem');
-  const sslCertPath = process.env.SSL_CERT_PATH || path.join(__dirname, 'cert', 'cert.pem');
+  const sslKeyPath = process.env.SSL_KEY_PATH || path.join(ROOT_DIR, 'cert', 'key.pem');
+  const sslCertPath = process.env.SSL_CERT_PATH || path.join(ROOT_DIR, 'cert', 'cert.pem');
   const HTTPS_PORT = process.env.HTTPS_PORT || 3443;
 
   if (fs.existsSync(sslKeyPath) && fs.existsSync(sslCertPath)) {

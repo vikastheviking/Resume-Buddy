@@ -52,10 +52,13 @@ Render provides free hosting with **automatic HTTPS/SSL certificates** and free 
    - Go to **[render.com](https://render.com)** and sign in with GitHub.
    - Click **"New +"** $\rightarrow$ **"Web Service"**.
    - Select your repository.
-   - Choose **"Docker"** as the Environment (it automatically detects the included [`Dockerfile`](./Dockerfile)).
+   - Choose **"Docker"** as the Environment (it automatically detects the included [`Dockerfile`](../Dockerfile)).
    - In **Environment Variables**, add:
      - `GROQ_API_KEY`: Your Groq API key (`gsk_...`)
      - `NODE_ENV`: `production`
+     - `RESUME_BUDDY_DATA_DIR` *(optional)*: path to a mounted disk for the
+       SQLite user store. Without a persistent disk the account database is
+       wiped on every redeploy, since Render's filesystem is ephemeral.
    - Click **"Create Web Service"**.
 
 Render will automatically build the Docker container and provide a live public HTTPS URL:
@@ -65,8 +68,8 @@ Render will automatically build the Docker container and provide a live public H
 
 ## 4. Railway / Fly.io / Heroku Deployment
 
-The repository includes a standard [`Procfile`](./Procfile):
+The repository includes a standard [`Procfile`](../Procfile):
 ```procfile
-web: node server.js
+web: node server/index.js
 ```
 You can deploy directly to Railway or Fly.io by connecting your Git repository and setting `GROQ_API_KEY`.

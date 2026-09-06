@@ -3,7 +3,7 @@ Sample Resumes and Job Descriptions for 1-Click Live Stage Demos.
 """
 
 SAMPLE_JOBS = {
-    "Manda Chakradev (Electrical to SQA Transition)": {
+    "Electrical Engineering to SQA Transition": {
         "jd": """Will be part of a team of SQA engineers in India to help achieve the quality of test deliverables.
 work closely with the SQA leads to define & implement an effective Test Strategy.
 create detailed test cases, review test cases, Test data and execute the Test Cases and file and handle defects as per the organization's defect life cycle.
@@ -25,13 +25,13 @@ Should be accountable and responsible for deliverables and outcomes.
 Should demonstrate ownership of tasks, meet deadlines, and ensure high-quality results.
 Demonstrates strong collaboration skills by working effectively with cross-functional teams, sharing insights, and contributing to shared goals and solutions.
 Continuously explore emerging trends, technologies, and industry best practices to drive innovation and maintain a competitive edge.""",
-        "resume": """MANDA CHAKRADEV SANTOSH PAVAN KUMAR
+        "resume": """AARAV NARAYAN VENKATA SRINIVASAN
 Electrical & Electronics Engineer | Electric Vehicles (EV) | Power Systems | EV Powertrain | Graduate Engineer Trainee
-+91-6305195293 | chakradevmandaspk@gmail.com | Rajamundry, Andhra Pradesh
-linkedin.com/in/chakradev-manda-b7065431b
++91-9000000000 | aarav.srinivasan@example.com | Vijayawada, Andhra Pradesh
+linkedin.com/in/aarav-srinivasan-sample
 
 PROFESSIONAL SUMMARY
-Electrical and Electronics Engineering (EEE) graduate with CGPA 8.5 from RVR and JC College of Engineering, Guntur.
+Electrical and Electronics Engineering (EEE) graduate with CGPA 8.5 from Sunrise Institute of Engineering & Technology, Vijayawada.
 Specialized in Electric Vehicles (EV), EV Powertrain, Battery Management Systems (BMS), BLDC Motors, Power Systems, and
 Electrical Maintenance. Completed industry internships at APTRANSCO (132/33 kV substation operations), Indian Railways
 (locomotive and coach electrical systems), and SL Lumax (automotive electrical manufacturing). Demonstrated leadership
@@ -47,7 +47,7 @@ Systems | Motor Controllers
 Soft Skills: Team Leadership | Project Management | Problem Solving | Communication | Organizing
 EDUCATION
 B.Tech / B.E. — Electrical & Electronics Engineering 2023 – 2026
-RVR and JC College of Engineering, Guntur | CGPA: 8.5 / 10
+Sunrise Institute of Engineering & Technology, Vijayawada | CGPA: 8.5 / 10
 Diploma (Class XII) — Electrical Engineering Passed: 2023
 English Medium | Score: 75%
 SSC (Class X) Passed: 2020
@@ -87,10 +87,10 @@ CERTIFICATIONS
 IEEE EXPERIENCE & VOLUNTEERING
 • Volunteered for STEM outreach in Government schools (Grades 6 & 7) — IEEE initiative.
 • Volunteered at IEEE IES SYP CONGRESS 2024, Hyderabad.
-• Event Organizer — URBANX 24 Hours Hackathon, RVR & JC College of Engineering.
+• Event Organizer — URBANX 24 Hours Hackathon, Sunrise Institute of Engineering & Technology.
 ADDITIONAL INFORMATION
 Languages: Telugu (Native) | English (Proficient) | Hindi (Conversational) | Tamil (Basic)
-Date of Birth: 27 July 2005 | Gender: Male | Location: Rajamundry, Andhra Pradesh"""
+Date of Birth: 01 January 2000 | Gender: Not disclosed | Location: Vijayawada, Andhra Pradesh"""
     },
     "Senior AI / MLOps Engineer (Tech Corp)": {
         "jd": """Senior AI / MLOps Engineer

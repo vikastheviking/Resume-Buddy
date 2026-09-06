@@ -5,7 +5,6 @@ Provides endpoints for text extraction, ATS scoring, Llama-3.3-70B optimization,
 """
 
 import os
-import sys
 import json
 import logging
 from typing import Dict, Any
@@ -17,16 +16,13 @@ from starlette.routing import Route
 from starlette.responses import JSONResponse, Response
 from starlette.requests import Request
 
-# Ensure local imports work cleanly
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from extractor import extract_text_from_bytes, clean_resume_text
-from scorer import evaluate_resume_ats
-from optimizer import optimize_resume
-from exporter import generate_ats_pdf, generate_ats_docx
-from sample_data import SAMPLE_JOBS
-from llm_client import BackendLLMClient
-from auth import login_user, signup_user, is_valid_email
+from engine.extractor import extract_text_from_bytes, clean_resume_text
+from engine.scorer import evaluate_resume_ats
+from engine.optimizer import optimize_resume
+from engine.exporter import generate_ats_pdf, generate_ats_docx
+from engine.sample_data import SAMPLE_JOBS
+from engine.llm_client import BackendLLMClient
+from engine.auth import login_user, signup_user, is_valid_email
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ats-api")

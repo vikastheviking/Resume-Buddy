@@ -1,7 +1,7 @@
-# Production Multi-Runtime Container (Node.js 18 + Python 3.11)
+# Production multi-runtime container (Node.js 18 + Python 3.11)
 FROM node:18-bullseye-slim
 
-# Install Python 3, pip, and build tools
+# Python 3, pip, and build tools
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
@@ -9,27 +9,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-# Set alias python -> python3
+# Alias python -> python3
 RUN ln -s /usr/bin/python3 /usr/bin/python
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt starlette uvicorn python-multipart
+# Python dependencies
+COPY requirements.txt ./
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Install Node.js dependencies
+# Node.js dependencies
 COPY package.json package-lock.json* ./
 RUN npm ci --omit=dev || npm install --omit=dev
 
-# Copy application source code
-COPY . .
+# Application source
+COPY engine/ ./engine/
+COPY server/ ./server/
+COPY public/ ./public/
 
-# Expose standard production port
 ENV PORT=3000
 ENV PYTHON_PORT=5001
 ENV NODE_ENV=production
+# `engine.*` imports resolve from the app root; unbuffered so Python logs
+# stream through the Node parent process instead of sitting in a buffer.
+ENV PYTHONPATH=/app
+ENV PYTHONUNBUFFERED=1
+ENV RESUME_BUDDY_DATA_DIR=/app/data
+
 EXPOSE 3000
 
-# Start unified production server
-CMD ["node", "server.js"]
+CMD ["node", "server/index.js"]

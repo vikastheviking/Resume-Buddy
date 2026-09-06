@@ -2,18 +2,12 @@
 Automated unit verification for ATS Resume Maker pipeline.
 """
 
-import os
-import sys
-
-# Add root directory to sys.path
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from extractor import clean_resume_text, parse_resume_sections
-from scorer import evaluate_resume_ats
-from optimizer import optimize_resume
-from exporter import generate_ats_pdf, generate_ats_docx
-from llm_client import UnifiedLLMClient
-from sample_data import SAMPLE_JOBS
+from engine.extractor import clean_resume_text, parse_resume_sections
+from engine.scorer import evaluate_resume_ats
+from engine.optimizer import optimize_resume
+from engine.exporter import generate_ats_pdf, generate_ats_docx
+from engine.llm_client import UnifiedLLMClient
+from engine.sample_data import SAMPLE_JOBS
 
 
 def test_entire_pipeline():

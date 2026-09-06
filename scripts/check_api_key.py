@@ -4,8 +4,8 @@ Use this script to test any API key (DeepSeek, NVIDIA NIM, Groq, or OpenAI)
 and see the exact response status, latency, and error details.
 
 Usage:
-  python test_key.py
-  (or pass your key as an argument: python test_key.py YOUR_API_KEY)
+  python scripts/check_api_key.py
+  (or pass your key as an argument: python scripts/check_api_key.py YOUR_API_KEY)
 """
 
 import sys

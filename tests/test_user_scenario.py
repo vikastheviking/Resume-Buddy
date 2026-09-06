@@ -1,32 +1,29 @@
 """
-Test specifically with user's exact resume and job description.
+End-to-end fidelity check: a career-change resume (Electrical Engineering -> SQA)
+optimized against a matching job description. Uses synthetic candidate data.
+
 Verifies that:
-1. Candidate's authentic name MANDA CHAKRADEV SANTOSH PAVAN KUMAR is preserved.
-2. Contact details (Rajamundry, email, phone, linkedin) are preserved.
-3. College (RVR and JC College of Engineering, Guntur) and real degree are preserved.
+1. The candidate's name AARAV NARAYAN VENKATA SRINIVASAN is preserved verbatim.
+2. Contact details (location, email, phone, linkedin) are preserved.
+3. College (Sunrise Institute of Engineering & Technology, Vijayawada) and the degree are preserved.
 4. Internships (SL Lumax, Indian Railways, APTRANSCO) are preserved.
 5. Projects (Retrofitted Electric Bike) are preserved.
 6. Target SQA keywords (SQA, Selenium, Test Cases, Jira, SQL, Defect Life Cycle) are integrated.
 7. ATS Score reaches 90-98%!
 """
 
-import os
-import sys
+from engine.scorer import evaluate_resume_ats
+from engine.optimizer import optimize_resume
+from engine.llm_client import UnifiedLLMClient
+from engine.exporter import generate_ats_pdf, generate_ats_docx
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-
-from scorer import evaluate_resume_ats
-from optimizer import optimize_resume
-from llm_client import UnifiedLLMClient
-from exporter import generate_ats_pdf, generate_ats_docx
-
-USER_RESUME = """MANDA CHAKRADEV SANTOSH PAVAN KUMAR
+USER_RESUME = """AARAV NARAYAN VENKATA SRINIVASAN
 Electrical & Electronics Engineer | Electric Vehicles (EV) | Power Systems | EV Powertrain | Graduate Engineer Trainee
-+91-6305195293 | chakradevmandaspk@gmail.com | Rajamundry, Andhra Pradesh
-linkedin.com/in/chakradev-manda-b7065431b
++91-9000000000 | aarav.srinivasan@example.com | Vijayawada, Andhra Pradesh
+linkedin.com/in/aarav-srinivasan-sample
 
 PROFESSIONAL SUMMARY
-Electrical and Electronics Engineering (EEE) graduate with CGPA 8.5 from RVR and JC College of Engineering, Guntur.
+Electrical and Electronics Engineering (EEE) graduate with CGPA 8.5 from Sunrise Institute of Engineering & Technology, Vijayawada.
 Specialized in Electric Vehicles (EV), EV Powertrain, Battery Management Systems (BMS), BLDC Motors, Power Systems, and
 Electrical Maintenance. Completed industry internships at APTRANSCO (132/33 kV substation operations), Indian Railways
 (locomotive and coach electrical systems), and SL Lumax (automotive electrical manufacturing). Demonstrated leadership
@@ -43,7 +40,7 @@ Soft Skills: Team Leadership | Project Management | Problem Solving | Communicat
 
 EDUCATION
 B.Tech / B.E. — Electrical & Electronics Engineering 2023 – 2026
-RVR and JC College of Engineering, Guntur | CGPA: 8.5 / 10
+Sunrise Institute of Engineering & Technology, Vijayawada | CGPA: 8.5 / 10
 Diploma (Class XII) — Electrical Engineering Passed: 2023
 English Medium | Score: 75%
 SSC (Class X) Passed: 2020
@@ -87,11 +84,11 @@ CERTIFICATIONS
 IEEE EXPERIENCE & VOLUNTEERING
 • Volunteered for STEM outreach in Government schools (Grades 6 & 7) — IEEE initiative.
 • Volunteered at IEEE IES SYP CONGRESS 2024, Hyderabad.
-• Event Organizer — URBANX 24 Hours Hackathon, RVR & JC College of Engineering.
+• Event Organizer — URBANX 24 Hours Hackathon, Sunrise Institute of Engineering & Technology.
 
 ADDITIONAL INFORMATION
 Languages: Telugu (Native) | English (Proficient) | Hindi (Conversational) | Tamil (Basic)
-Date of Birth: 27 July 2005 | Gender: Male | Location: Rajamundry, Andhra Pradesh"""
+Date of Birth: 01 January 2000 | Gender: Not disclosed | Location: Vijayawada, Andhra Pradesh"""
 
 USER_JD = """Will be part of a team of SQA engineers in India to help achieve the quality of test deliverables.
 work closely with the SQA leads to define & implement an effective Test Strategy.
@@ -136,10 +133,10 @@ def run_test():
     print(f"Impact Score: {opt_audit['impact_score']}%")
 
     # Assertions
-    assert "MANDA CHAKRADEV SANTOSH PAVAN KUMAR" in optimized_text, "ERROR: Candidate name lost!"
-    assert "6305195293" in optimized_text, "ERROR: Phone number lost!"
-    assert "chakradevmandaspk@gmail.com" in optimized_text, "ERROR: Email lost!"
-    assert "RVR and JC College" in optimized_text or "RVR" in optimized_text, "ERROR: College lost!"
+    assert "AARAV NARAYAN VENKATA SRINIVASAN" in optimized_text, "ERROR: Candidate name lost!"
+    assert "9000000000" in optimized_text, "ERROR: Phone number lost!"
+    assert "aarav.srinivasan@example.com" in optimized_text, "ERROR: Email lost!"
+    assert "Sunrise Institute" in optimized_text, "ERROR: College lost!"
     assert "SL Lumax" in optimized_text, "ERROR: SL Lumax internship lost!"
     assert "Indian Railways" in optimized_text, "ERROR: Indian Railways internship lost!"
     assert "APTRANSCO" in optimized_text, "ERROR: APTRANSCO internship lost!"

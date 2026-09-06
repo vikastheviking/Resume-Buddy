@@ -137,7 +137,7 @@ def extract_candidate_metadata(text: str) -> Dict[str, Any]:
     # 6. Location Detection (look in top 6 lines)
     location = ""
     for line in lines[:6]:
-        # Look for city, state patterns e.g., "Rajamundry, Andhra Pradesh" or "San Francisco, CA"
+        # Look for city, state patterns e.g., "Vijayawada, Andhra Pradesh" or "San Francisco, CA"
         loc_match = re.search(r"([A-Z][a-zA-Z\s]+,\s*[A-Z][a-zA-Z\s]+)", line)
         if loc_match and not any(k in loc_match.group(0).lower() for k in ["college", "university", "school", "technologies", "engineer"]):
             location = loc_match.group(0).strip()

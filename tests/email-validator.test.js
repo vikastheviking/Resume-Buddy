@@ -1,8 +1,8 @@
 /**
- * Unit Test Suite for email_validator.js
+ * Unit Test Suite for server/email-validator.js
  */
 
-const { verifyRealEmail } = require('./email_validator');
+const { verifyRealEmail } = require('../server/email-validator');
 
 async function runTests() {
   console.log('=== Running Email Verification Tests ===\n');

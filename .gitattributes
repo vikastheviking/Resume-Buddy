@@ -1,0 +1,18 @@
+# Normalise line endings: LF in the repository, native in the working tree.
+* text=auto eol=lf
+
+# Shell scripts and container files must stay LF even on Windows checkouts.
+*.sh        text eol=lf
+Dockerfile  text eol=lf
+Procfile    text eol=lf
+
+# Binary assets — never diff or convert.
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.pdf  binary
+*.docx binary
+*.woff  binary
+*.woff2 binary

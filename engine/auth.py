@@ -11,10 +11,16 @@ import secrets
 from datetime import datetime
 from typing import Tuple, Optional
 
-DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.db")
+_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Runtime state lives outside the source tree; override with RESUME_BUDDY_DATA_DIR
+# to point at a mounted volume in containerised deployments.
+DATA_DIR = os.environ.get("RESUME_BUDDY_DATA_DIR", os.path.join(_REPO_ROOT, "data"))
+DB_PATH = os.path.join(DATA_DIR, "users.db")
 
 
 def get_db_connection() -> sqlite3.Connection:
+    os.makedirs(DATA_DIR, exist_ok=True)
     conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn

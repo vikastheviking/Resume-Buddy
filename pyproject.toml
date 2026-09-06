@@ -1,0 +1,4 @@
+[tool.pytest.ini_options]
+# Run pytest from the repo root so `engine.*` imports resolve without sys.path hacks.
+pythonpath = ["."]
+testpaths = ["tests"]

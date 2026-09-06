@@ -4,13 +4,13 @@ ATS Resume Architect & Optimizer - Streamlit Web Application
 
 import streamlit as st
 import time
-from extractor import extract_text_from_bytes, clean_resume_text
-from scorer import evaluate_resume_ats
-from optimizer import optimize_resume
-from exporter import generate_ats_pdf, generate_ats_docx
-from llm_client import BackendLLMClient, UnifiedLLMClient
-from sample_data import SAMPLE_JOBS
-from auth import login_user, signup_user
+from engine.extractor import extract_text_from_bytes, clean_resume_text
+from engine.scorer import evaluate_resume_ats
+from engine.optimizer import optimize_resume
+from engine.exporter import generate_ats_pdf, generate_ats_docx
+from engine.llm_client import BackendLLMClient, UnifiedLLMClient
+from engine.sample_data import SAMPLE_JOBS
+from engine.auth import login_user, signup_user
 
 st.set_page_config(
     page_title="ATS Resume Architect & Optimizer",

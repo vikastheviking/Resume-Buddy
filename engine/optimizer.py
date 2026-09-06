@@ -7,9 +7,9 @@ strict ATS parseability for top-tier enterprise companies.
 
 import re
 from typing import Dict, Any, Tuple, List
-from extractor import clean_resume_text, parse_resume_sections, extract_candidate_metadata
-from scorer import evaluate_resume_ats
-from llm_client import UnifiedLLMClient
+from engine.extractor import clean_resume_text, parse_resume_sections, extract_candidate_metadata
+from engine.scorer import evaluate_resume_ats
+from engine.llm_client import UnifiedLLMClient
 
 
 SYSTEM_OPTIMIZER_PROMPT = """You are a Principal Tech Recruiter and ATS Algorithm Specialist at a Fortune 500 company.
