@@ -17,6 +17,8 @@ from engine.optimizer import optimize_resume
 from engine.llm_client import UnifiedLLMClient
 from engine.exporter import generate_ats_pdf, generate_ats_docx
 
+import pytest
+
 USER_RESUME = """AARAV NARAYAN VENKATA SRINIVASAN
 Electrical & Electronics Engineer | Electric Vehicles (EV) | Power Systems | EV Powertrain | Graduate Engineer Trainee
 +91-9000000000 | aarav.srinivasan@example.com | Vijayawada, Andhra Pradesh
@@ -113,7 +115,8 @@ Demonstrates strong collaboration skills by working effectively with cross-funct
 Continuously explore emerging trends, technologies, and industry best practices to drive innovation and maintain a competitive edge."""
 
 
-def run_test():
+@pytest.mark.live
+def test_end_to_end_fidelity():
     print("=== Testing User Scenario: Electrical Engineer to SQA Job ===")
     
     baseline = evaluate_resume_ats(USER_RESUME, USER_JD)
@@ -155,4 +158,4 @@ def run_test():
 
 
 if __name__ == "__main__":
-    run_test()
+    test_end_to_end_fidelity()

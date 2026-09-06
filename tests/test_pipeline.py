@@ -9,7 +9,10 @@ from engine.exporter import generate_ats_pdf, generate_ats_docx
 from engine.llm_client import UnifiedLLMClient
 from engine.sample_data import SAMPLE_JOBS
 
+import pytest
 
+
+@pytest.mark.live
 def test_entire_pipeline():
     print("=== Starting ATS Pipeline Verification ===")
     
