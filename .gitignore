@@ -1,20 +1,22 @@
-# Environment & Secret Credentials
+# Environment & secrets
 .env
 .env.local
 .env.*.local
 
-# User Database (SQLite)
+# Runtime state (SQLite user store lives in data/)
+data/
 users.db
 *.sqlite
 *.db
 
-# Node.js dependencies & logs
+# Node.js
 node_modules/
+web/dist/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Python cache & virtual environments
+# Python
 __pycache__/
 *.py[cod]
 *$py.class
@@ -23,13 +25,15 @@ __pycache__/
 env/
 venv/
 .venv/
+.pytest_cache/
+*.egg-info/
 
-# Operating System & IDE artifacts
+# OS & IDE
 .DS_Store
 Thumbs.db
 .vscode/
 .idea/
 
-# SSL Certificates
+# TLS certificates
 cert/
 *.pem

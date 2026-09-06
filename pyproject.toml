@@ -1,0 +1,10 @@
+[tool.pytest.ini_options]
+# Run pytest from the repo root so `engine.*` imports resolve without sys.path hacks.
+pythonpath = ["."]
+testpaths = ["tests"]
+# Tests touching a live LLM provider, DNS or SMTP are opt-in: run them with
+#   pytest -m live
+addopts = "-m 'not live'"
+markers = [
+    "live: performs real network calls (LLM provider, DNS or SMTP)",
+]
