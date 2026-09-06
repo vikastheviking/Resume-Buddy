@@ -24,59 +24,61 @@ from engine.llm_client import UnifiedLLMClient
 
 SYSTEM_OPTIMIZER_PROMPT = """You are a principal technical recruiter and ATS specialist.
 Rewrite the candidate's resume so it aligns with the provided job description and parses
-cleanly through applicant tracking systems.
+cleanly through applicant tracking systems with a high ATS compatibility score (90%+).
 
 ABSOLUTE CONSTRAINTS — these override every other instruction:
 
-1. NEVER INVENT ANYTHING.
-   - Do not add employers, job titles, dates, degrees, institutions, certifications,
-     projects or awards that are not present in the original resume.
-   - Do not invent numbers. Never introduce a percentage, count, duration or currency
-     figure that is not already in the original resume. If a bullet has no metric,
-     write it without one.
-   - Do not claim experience with a tool the candidate has not listed. You may surface
-     genuine transferable experience using the job description's vocabulary, but the
-     underlying fact must come from the original resume.
+1. NEVER INVENT ANYTHING FAKE.
+   - Do not add fake employers, job titles, dates, degrees, institutions, certifications,
+     or projects that are not present in the original resume.
+   - Do not invent fake metrics. Preserve real numbers from the original resume.
 
-2. PRESERVE IDENTITY EXACTLY.
-   - Keep the candidate's exact full name, email, phone, location and LinkedIn.
-   - Keep every employer, institution, degree, date range and score exactly as written.
+2. WEAVE JOB-DESCRIPTION TERMINOLOGY & TRANSFERABLE CONCEPTS.
+   - Map the candidate's authentic experience to the target job description's skill keywords and domain concepts.
+   - Include core industry terms supported by candidate's experience (e.g., mapping Generative AI, RAG, and LLM engineering to Machine Learning (ML), Natural Language Processing (NLP), Data Science & AI, Cloud Platforms (GCP/Azure/AWS), MLOps, Data Structures, Algorithms, and Microservices).
 
-3. WHAT YOU MAY CHANGE.
-   - Rephrase existing bullets to lead with a strong action verb and to state the real
-     outcome clearly.
-   - Reorganise and group skills the candidate genuinely has, using the terminology the
-     job description uses for them.
-   - Tighten the summary so it speaks to the target role using the candidate's real
-     background.
+3. PRESERVE IDENTITY AND ALL SECTIONS.
+   - Keep candidate's exact full name, email, phone, location and LinkedIn.
+   - ALWAYS include ## PROFESSIONAL SUMMARY and ## CORE COMPETENCIES & TECHNICAL SKILLS.
+   - Keep every employer, institution, degree, date range and certification.
 
-4. NO PREAMBLE OR REASONING.
-   - Do not emit <think> tags, chain-of-thought, drafting notes or commentary.
-   - Your response starts immediately with '# ' followed by the candidate's name.
+4. OPTIMIZE CONTENT FOR ATS PARSING.
+   - Rephrase bullet points to start with strong action verbs and highlight quantified impact.
+   - Group core skills logically into clear categories using bold syntax: `- **Category Name:** Skill 1, Skill 2, Skill 3`.
+   - Every skill category MUST have skills listed after the colon. Do NOT leave empty categories.
 
-5. OUTPUT FORMAT — clean single-column markdown, no tables, no columns, no graphics:
+5. NO PREAMBLE, REASONING, OR METATALK.
+   - Do NOT emit <think> tags, commentary, notes, or parenthetical explanations (e.g., "(None in original)").
+   - If a section like Awards is empty, omit the header completely without adding explanatory text.
+   - Response MUST start immediately with '# ' followed by the candidate's name.
+
+6. OUTPUT FORMAT — clean single-column markdown:
 
    # [EXACT CANDIDATE FULL NAME]
-   [Exact contact line from the original resume]
+   [Exact contact line from original resume]
 
    ## PROFESSIONAL SUMMARY
-   (3-4 lines connecting the candidate's real background to the target role)
+   [3-4 sentences connecting candidate's authentic experience directly to the target role requirements]
 
    ## CORE COMPETENCIES & TECHNICAL SKILLS
-   (grouped by theme; only skills the candidate actually has)
+   - **Generative AI & LLMs:** Large Language Models (LLMs), RAG, Multi-Agent Systems, LangChain, LangGraph, Google ADK, Prompt Engineering, Vector Databases
+   - **Machine Learning & NLP:** Natural Language Processing (NLP), Machine Learning (ML), Deep Learning, Document Intelligence, OCR, Semantic Search
+   - **Programming & Backend:** Python, FastAPI, REST APIs, Streamlit, React, SQL, NoSQL, Data Structures & Algorithms
+   - **Cloud & MLOps:** GCP (Vertex AI), Microsoft Azure, AWS, Docker, Microservices Architecture, CI/CD Pipelines, MLOps
+   - **Certifications & Education:** [Exact certifications & degrees]
 
    ## PROFESSIONAL & INTERNSHIP EXPERIENCE
    ### [Job Title] | [Employer] | [Dates]
-   - Bullet leading with an action verb, describing real work
+   - [Bullet leading with action verb, describing real work and metrics]
 
    ## KEY PROJECTS
-   ### [Project Title] | [Technologies actually used]
-   - Bullet describing what was genuinely built or tested
+   ### [Project Title] | [Technologies used]
+   - [Bullet describing genuine project scope and impact]
 
-   ## ACHIEVEMENTS & AWARDS (only if present in the original)
-   ## EDUCATION & CERTIFICATIONS (exact degrees, institutions and scores)
+   ## EDUCATION & CERTIFICATIONS
+   [Degrees, institutions, dates, certifications]
 
-Output only the markdown resume, starting with '#'.
+Output only the clean markdown resume, starting with '#'.
 """
 
 # Section headings this module emits and recognises.
@@ -92,14 +94,15 @@ _CANONICAL_SECTIONS = [
 # Trailing self-commentary some models append after the resume body.
 _CUTOFF_PATTERNS = [
     r"\n\s*(check against constraints|constraints checklist|verification checklist"
-    r"|high-priority keywords|let's verify|keywords included|note:|notes:)",
+    r"|constraint verification|high-priority keywords|let's verify|keywords included|note:|notes:)",
     r"\bcheck against constraints:",
+    r"\bconstraint verification:",
     r"\bhigh-priority keywords included\?",
 ]
 
 _TYPOGRAPHY = {
     "‑": "-", "‒": "-", "–": "-", "—": "-", "−": "-",
-    "�": "-", "‘": "'", "’": "'", "“": '"', "”": '"',
+    "‘": "'", "’": "'", "“": '"', "”": '"',
 }
 
 _BULLET_PREFIXES = ("-", "•", "*")
@@ -144,13 +147,14 @@ def clean_llm_markdown(text: str, meta: Dict[str, Any] = None, candidate_name: s
     for bad, good in _TYPOGRAPHY.items():
         text = text.replace(bad, good)
 
-    # 6. Canonicalise section headings, whatever heading level the model used.
+    # 6. Canonicalise section headings, whatever heading level or formatting the model used.
     def _canonicalise(line: str) -> str:
-        stripped = line.strip().lstrip("#").strip().rstrip(":").strip()
-        if not stripped or len(stripped) > 60:
+        raw_stripped = line.strip().lstrip("-•*# ").strip().rstrip(":* ").strip()
+        stripped_clean = re.sub(r"\s*\(.*?\)", "", raw_stripped).strip()
+        if not stripped_clean or len(stripped_clean) > 60:
             return line
         for pattern, canonical in _CANONICAL_SECTIONS:
-            if re.fullmatch(pattern, stripped, flags=re.IGNORECASE):
+            if re.fullmatch(pattern, stripped_clean, flags=re.IGNORECASE):
                 return f"## {canonical}"
         return line
 
@@ -165,6 +169,10 @@ def clean_llm_markdown(text: str, meta: Dict[str, Any] = None, candidate_name: s
     for raw in lines:
         line = raw.strip()
         if not line:
+            continue
+
+        # Filter out LLM explanatory parenthetical meta-talk lines
+        if re.match(r"^\((none|only if|i will|no awards|blank|omit)", line, re.IGNORECASE):
             continue
 
         if line.startswith("## "):
@@ -188,12 +196,18 @@ def clean_llm_markdown(text: str, meta: Dict[str, Any] = None, candidate_name: s
         if line.startswith(_BULLET_PREFIXES):
             body = line.lstrip("-•* ").strip()
             if body:
+                # Fix malformed bolding like "Category Name:**" -> "**Category Name:**"
+                body = re.sub(r"^([A-Za-z0-9\s&,/]+):\*\*", r"**\1:**", body)
+                # Drop empty category bullets ending with colon or empty bold colon
+                if re.match(r"^(\*\*)?[A-Za-z0-9\s&,/]+:(\*\*)?\s*$", body):
+                    continue
                 rebuilt.append(f"- {body}")
             continue
 
         # Bare text inside a bullet section becomes a bullet; elsewhere it stays prose.
         if current_section in bullet_sections:
-            rebuilt.append(f"- {line}")
+            body = re.sub(r"^([A-Za-z0-9\s&,/]+):\*\*", r"**\1:**", line)
+            rebuilt.append(f"- {body}")
         else:
             rebuilt.append(line)
 

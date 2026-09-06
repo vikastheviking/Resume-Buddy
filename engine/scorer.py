@@ -21,6 +21,18 @@ COMMON_SKILLS_TAXONOMY = {
     "next.js", "node.js", "django", "fastapi", "flask", "spring boot", "rest api", "graphql",
     "docker", "kubernetes", "aws", "azure", "gcp", "terraform", "ci/cd", "jenkins", "git", "linux",
 
+    # AI, Machine Learning, GenAI & Data Science
+    "machine learning", "ml", "deep learning", "natural language processing", "nlp",
+    "generative ai", "genai", "gen ai", "large language models", "large language model", "llm", "llms",
+    "retrieval-augmented generation", "retrieval augmented generation", "rag", "multi-agent systems",
+    "multi agent systems", "agentic ai", "agentic", "langchain", "langgraph", "google adk", "adk",
+    "vertex ai", "gemini", "gemini pro", "openai", "bedrock", "prompt engineering", "embeddings",
+    "semantic search", "vector search", "vector database", "vector databases", "document intelligence",
+    "ocr", "pdf parsing", "data science", "data modeling", "data modelling", "data structure",
+    "data structures", "algorithms", "pyspark", "databricks", "mlops", "mlflow", "microservices",
+    "microservice", "semantic kernel", "crewai", "responsible ai", "power bi", "cloud platforms",
+    "azure devops", "github actions",
+
     # SQA & Software Testing
     "selenium", "katalon", "uft", "sqa", "qa", "test automation", "test cases", "test strategy",
     "test execution", "defect life cycle", "defect tracking", "regression testing", "api testing",
@@ -181,6 +193,20 @@ def extract_keywords_from_text(text: str) -> frozenset:
     return frozenset(found)
 
 
+SYNONYM_GROUPS = [
+    {"ml", "machine learning"},
+    {"nlp", "natural language processing"},
+    {"llm", "llms", "large language model", "large language models"},
+    {"rag", "retrieval-augmented generation", "retrieval augmented generation"},
+    {"genai", "gen ai", "generative ai"},
+    {"gcp", "google cloud platform", "google cloud"},
+    {"aws", "amazon web services"},
+    {"azure", "microsoft azure"},
+    {"microservices", "microservice", "microservices architecture"},
+    {"vector database", "vector databases", "vector search"},
+]
+
+
 def _terms_present_in(terms: Set[str], haystack: str) -> Set[str]:
     """
     Which of `terms` appear in `haystack`.
@@ -199,6 +225,13 @@ def _terms_present_in(terms: Set[str], haystack: str) -> Set[str]:
         pattern = rf"(?<![\w+#.]){re.escape(term)}s?(?![\w+#])"
         if re.search(pattern, haystack, re.IGNORECASE):
             found.add(term)
+            continue
+        # Synonym check: if any synonym of term is present in haystack
+        for group in SYNONYM_GROUPS:
+            if term in group:
+                if any(syn in haystack.lower() for syn in group):
+                    found.add(term)
+                    break
 
     return found
 

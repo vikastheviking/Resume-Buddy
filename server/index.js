@@ -22,7 +22,7 @@ require('dotenv').config();
 
 // Repo root: this file lives in server/, everything else resolves from one level up.
 const ROOT_DIR = path.join(__dirname, '..');
-const PYTHON_BIN = process.env.PYTHON_BIN || 'python';
+const PYTHON_BIN = process.env.PYTHON_BIN || (process.platform === 'win32' ? 'py' : 'python');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
