@@ -10,6 +10,3 @@ python-dotenv>=1.0.0    # loads .env when the engine runs standalone
 starlette>=0.37.0
 uvicorn>=0.30.0
 python-multipart>=0.0.9  # required by Starlette request.form() for resume uploads
-
-# Optional standalone Streamlit UI (engine.streamlit_app)
-streamlit>=1.35.0

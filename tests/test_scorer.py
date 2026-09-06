@@ -28,6 +28,24 @@ class TestKeywordExtraction:
         found = extract_keywords_from_text("Worked on a battery management system for EVs.")
         assert "battery management system" in found
 
+    def test_excludes_prose_fragments_the_phrase_pattern_catches(self):
+        """'quality of the deliverables' is prose, not a named skill."""
+        found = extract_keywords_from_text("Responsible for the quality of deliverables and quality results.")
+        assert "quality of" not in found
+        assert "quality results" not in found
+
+    def test_drops_a_phrase_that_is_only_a_prefix_of_a_longer_one(self):
+        """The phrase pattern extends one word at a time, yielding truncated fragments."""
+        found = extract_keywords_from_text("Owns the defect life cycle end to end.")
+        assert "defect life cycle" in found
+        assert "defect life" not in found
+
+    def test_keeps_a_curated_term_that_prefixes_a_longer_one(self):
+        """'api' and 'api testing' are separate requirements; neither should absorb the other."""
+        found = extract_keywords_from_text("Needs API design and API testing experience.")
+        assert "api" in found
+        assert "api testing" in found
+
 
 class TestKeywordMatching:
     def test_term_nested_in_a_longer_term_still_counts(self):

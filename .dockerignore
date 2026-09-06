@@ -1,6 +1,7 @@
 .git/
 .gitignore
 node_modules/
+web/dist/
 __pycache__/
 *.py[cod]
 .venv/

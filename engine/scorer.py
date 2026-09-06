@@ -91,6 +91,13 @@ _PHRASE_RE = re.compile(
     r"\b(test\s+[a-z]+|defect\s+[a-z]+|quality\s+[a-z]+|power\s+[a-z]+"
     r"|circuit\s+[a-z]+|battery\s+[a-z]+)\b"
 )
+# Words that end a prose fragment rather than a skill name.
+_PHRASE_TAIL_STOPWORDS = {
+    "of", "the", "and", "or", "a", "an", "to", "for", "in", "on", "with", "at", "by",
+    "is", "are", "was", "were", "be", "been", "as", "that", "this", "it", "its",
+    "results", "result", "levels", "level", "standards", "issues", "related",
+}
+
 _NAMED_TOOLS = {
     "katalon", "selenium", "oracle", "jira", "postman", "matlab",
     "simulink", "autocad", "tableau", "jenkins", "kubernetes", "terraform",
@@ -147,15 +154,29 @@ def extract_keywords_from_text(text: str) -> frozenset:
         if acronym not in _ACRONYM_STOPWORDS and not acronym.isdigit():
             found.add(acronym.lower())
 
-    # 3. Domain phrase patterns ("test coverage", "defect tracking", ...).
+    # 3. Domain phrase patterns ("test coverage", "defect tracking", ...). The trailing
+    # word is checked because the pattern happily matches ordinary prose such as
+    # "quality of" or "quality results", which are not skills.
+    discovered_phrases = set()
     for phrase in _PHRASE_RE.findall(text.lower()):
-        if len(phrase.split()) >= 2:
-            found.add(phrase.strip())
+        words = phrase.split()
+        if len(words) >= 2 and words[-1] not in _PHRASE_TAIL_STOPWORDS:
+            discovered_phrases.add(phrase.strip())
 
     # 4. Named tools that appear capitalised in prose.
     for term in _TITLE_TERM_RE.findall(text):
         if term.lower() in _NAMED_TOOLS:
             found.add(term.lower())
+
+    # The phrase pattern extends one word at a time, so "defect life cycle" also yields
+    # the meaningless fragment "defect life". Drop a discovered phrase when it is only a
+    # prefix of something longer. This is applied to discovered phrases alone: curated
+    # terms like "api" are real requirements in their own right and must survive even
+    # when "api testing" is also present.
+    found |= {
+        phrase for phrase in discovered_phrases
+        if not any(other != phrase and other.startswith(f"{phrase} ") for other in found | discovered_phrases)
+    }
 
     return frozenset(found)
 

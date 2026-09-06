@@ -98,8 +98,21 @@ const upload = multer({
   },
 });
 
-app.use(express.static(path.join(ROOT_DIR, 'public'), {
-  maxAge: IS_PRODUCTION ? '1h' : '0',
+// The React app is built by Vite into web/dist. Hashed asset filenames make them
+// safe to cache hard; index.html must not be, or clients pin an old build.
+const CLIENT_DIR = path.join(ROOT_DIR, 'web', 'dist');
+const CLIENT_INDEX = path.join(CLIENT_DIR, 'index.html');
+
+if (!fs.existsSync(CLIENT_INDEX)) {
+  console.warn('[web] web/dist is missing — run `npm run build` to compile the frontend.');
+}
+
+app.use(express.static(CLIENT_DIR, {
+  index: false,
+  maxAge: IS_PRODUCTION ? '1y' : '0',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('index.html')) res.setHeader('Cache-Control', 'no-cache');
+  },
 }));
 
 // Rate limits. Optimization is the expensive path (it spends LLM tokens); OTP dispatch
@@ -472,7 +485,13 @@ app.use('/api', (req, res) => {
 
 // SPA fallback for everything else.
 app.get('*', (req, res) => {
-  res.sendFile(path.join(ROOT_DIR, 'public', 'index.html'));
+  if (!fs.existsSync(CLIENT_INDEX)) {
+    return res
+      .status(503)
+      .type('text/plain')
+      .send('Frontend has not been built yet. Run `npm run build`, then reload.');
+  }
+  return res.sendFile(CLIENT_INDEX);
 });
 
 // Multer and body-parser surface their own errors; translate them into clean JSON.

@@ -55,8 +55,9 @@ mode — but it will not raise keyword coverage, and the result panel labels it 
 
 ```
 ┌──────────────────────────────┐
-│      Client Web Browser      │   public/
-│ (HTML5 / Vanilla JS / CSS3)  │
+│   React single-page client   │   web/  →  web/dist
+│    (Vite build, no runtime   │
+│     framework beyond React)  │
 └──────────────┬───────────────┘
                │ HTTP / JSON
                ▼
@@ -93,7 +94,6 @@ exits. The engine binds to loopback only; the Node process is the sole public en
 .
 ├── engine/                   Python ATS engine (importable package)
 │   ├── api.py                 Starlette REST API — the service the Node server proxies to
-│   ├── streamlit_app.py       optional standalone Streamlit UI
 │   ├── extractor.py           PDF/DOCX/text extraction and section parsing
 │   ├── scorer.py              ATS compatibility scoring
 │   ├── optimizer.py           LLM-driven rewrite against a job description
@@ -105,7 +105,14 @@ exits. The engine binds to loopback only; the Node process is the sole public en
 │   ├── index.js               Express app, static hosting, API proxy, engine supervisor
 │   ├── email-validator.js     5-layer email verification
 │   └── otp-service.js         OTP generation, delivery and verification
-├── public/                   static frontend (index.html, app.js, style.css)
+├── web/                      React frontend (Vite)
+│   ├── index.html             HTML shell
+│   └── src/
+│       ├── App.jsx            page composition and app state
+│       ├── api.js             typed calls to the backend
+│       ├── markdown.jsx       renders engine markdown as React elements
+│       ├── styles.css         the classic design system
+│       └── components/        DocumentInput, ScorePanel, AuditPanel, AuthDialog
 ├── tests/                    test suites for both runtimes
 ├── scripts/                  developer utilities
 │   └── check_api_key.py       LLM provider key/latency diagnostics
@@ -136,7 +143,15 @@ npm install
 pip install -r requirements.txt
 ```
 
-### 3. Configure
+### 3. Build the frontend
+
+```bash
+npm run build
+```
+
+This compiles the React app into `web/dist`, which the server serves as static files.
+
+### 4. Configure
 
 ```bash
 cp .env.example .env
@@ -146,7 +161,7 @@ Set `GROQ_API_KEY` in `.env` — a free key is available at [console.groq.com](h
 Without it the app still runs, but only the structural pass is available. Live OTP email
 delivery is optional; see the comments in `.env.example`.
 
-### 4. Run
+### 5. Run
 
 ```bash
 npm start
@@ -164,10 +179,11 @@ Start only the Python API (defaults to port 5001, override with `PYTHON_PORT`):
 python -m engine.api
 ```
 
-Run the optional Streamlit UI, which drives the same engine without the Node layer:
+Develop the frontend with hot reload. Vite serves on :5173 and proxies `/api` to the
+Node server, so run `npm start` in another terminal alongside it:
 
 ```bash
-python -m streamlit run engine/streamlit_app.py
+npm run dev:web
 ```
 
 Diagnose an LLM provider key — status, latency and error detail:

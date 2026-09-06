@@ -9,9 +9,15 @@ This guide explains how to run the production Node.js application, generate an i
 To run the application locally:
 
 ```bash
-# 1. Start the unified Node.js + Python server
+# 1. Compile the React frontend into web/dist
+npm run build
+
+# 2. Start the unified Node.js + Python server
 npm start
 ```
+
+The server serves the compiled frontend from `web/dist`. If that directory is missing it
+logs a warning at startup and serves a short instruction page instead of the app.
 
 - **Web Application URL**: [http://localhost:3000](http://localhost:3000)
 - The server will automatically launch and orchestrate the Python ATS optimization engine in the background.
@@ -72,4 +78,11 @@ The repository includes a standard [`Procfile`](../Procfile):
 ```procfile
 web: node server/index.js
 ```
-You can deploy directly to Railway or Fly.io by connecting your Git repository and setting `GROQ_API_KEY`.
+You can deploy directly to Railway or Fly.io by connecting your Git repository and setting
+`GROQ_API_KEY`.
+
+These platforms run `npm run build` automatically after installing dependencies, which
+compiles the frontend. If yours does not, add it to the build command explicitly —
+`node server/index.js` alone will start the API but serve no UI. The Docker path handles
+this already: the image builds the frontend in a first stage and copies `web/dist` into
+the runtime stage, so the build toolchain never ships to production.

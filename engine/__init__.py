@@ -1,8 +1,7 @@
 """
 Resume-Buddy ATS engine.
 
-Core resume-optimization pipeline shared by the Starlette API (`engine.api`)
-and the Streamlit UI (`engine.streamlit_app`):
+Core resume-optimization pipeline behind the Starlette API (`engine.api`):
 
     extractor  -> text extraction and section parsing
     scorer     -> ATS compatibility scoring

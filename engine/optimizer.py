@@ -294,13 +294,18 @@ def _format_resume_structurally(resume_text: str, meta: Dict[str, Any]) -> str:
     if contact:
         parts.append(contact)
 
+    # When the resume keeps certifications in their own section, education gets a plain
+    # heading; otherwise the combined heading covers both and no empty section is emitted.
+    has_certifications = bool((sections.get("certifications") or "").strip())
+    education_heading = "EDUCATION" if has_certifications else "EDUCATION & CERTIFICATIONS"
+
     ordered = [
         ("summary", "PROFESSIONAL SUMMARY", False),
         ("skills", "CORE COMPETENCIES & TECHNICAL SKILLS", False),
         ("experience", "PROFESSIONAL & INTERNSHIP EXPERIENCE", True),
         ("projects", "KEY PROJECTS", True),
         ("achievements", "ACHIEVEMENTS & AWARDS", True),
-        ("education", "EDUCATION & CERTIFICATIONS", False),
+        ("education", education_heading, False),
         ("certifications", "CERTIFICATIONS", False),
     ]
 
