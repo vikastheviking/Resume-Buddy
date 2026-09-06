@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ats-resume-architect
+    env: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: PYTHON_PORT
+        value: 5001
+      - key: NODE_ENV
+        value: production
+      - key: GROQ_API_KEY
+        sync: false

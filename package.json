@@ -1,0 +1,28 @@
+{
+  "name": "ats-resume-architect",
+  "version": "2.0.0",
+  "description": "Production ATS Resume Architect & 95%+ Optimizer Web Application",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "tunnel": "npx localtunnel --port 3000 --subdomain ats-resume-architect"
+  },
+  "keywords": [
+    "ats",
+    "resume",
+    "optimizer",
+    "ai",
+    "llama3",
+    "groq"
+  ],
+  "author": "Google DeepMind Advanced Agentic Coding",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "multer": "^1.4.5-lts.1",
+    "nodemailer": "^6.9.13"
+  }
+}
