@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { sendOtp, validateEmail, verifyOtp } from '../api';
+import { guestSession, sendOtp, validateEmail, verifyOtp } from '../api';
 
 const RESEND_SECONDS = 45;
 const GUEST_IDENTITY = 'guest@resume-buddy.local';
@@ -134,7 +134,7 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
     setAlert(null);
     try {
       const data = await verifyOtp(pendingEmail, otp.trim());
-      onAuthenticated(data.email);
+      onAuthenticated(data.email, data.token);
       onNotify(`Signed in as ${data.email}`);
     } catch (error) {
       setAlert({ tone: 'error', message: error.message });
@@ -226,9 +226,18 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
             <button
               type="button"
               className="button button--ghost button--block"
-              onClick={() => {
-                onAuthenticated(GUEST_IDENTITY);
-                onNotify('Continuing as a guest.');
+              disabled={busy}
+              onClick={async () => {
+                setBusy(true);
+                try {
+                  const data = await guestSession();
+                  onAuthenticated(data.email || GUEST_IDENTITY, data.token);
+                  onNotify('Continuing as a guest.');
+                } catch (error) {
+                  setAlert({ tone: 'error', message: error.message });
+                } finally {
+                  setBusy(false);
+                }
               }}
             >
               Continue as guest

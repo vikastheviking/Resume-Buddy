@@ -37,3 +37,9 @@ Thumbs.db
 # TLS certificates
 cert/
 *.pem
+
+# Cloudflare tunnel binary
+cloudflared.exe
+
+# Scratch/local experiments — routinely contains real personal test data
+scratch/

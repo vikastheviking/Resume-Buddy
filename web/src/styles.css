@@ -23,6 +23,7 @@
   --accent: #1f3a5f;
   --accent-deep: #16293f;
   --accent-wash: #e8edf4;
+  --accent-ink: #fff;
   --positive: #3f5f43;
   --positive-wash: #e7eee6;
   --negative: #7f2d2d;
@@ -36,6 +37,56 @@
 
   --radius: 2px;
   --shell: 1180px;
+}
+
+/* Dark palette: same roles, ink-on-paper inverted to paper-on-ink. Applies automatically
+   when the OS is set to dark and the user has not overridden it, and always when the
+   user has explicitly chosen dark via the header toggle. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #161512;
+    --paper-raised: #1e1c19;
+    --paper-sunken: #0f0e0c;
+    --ink: #ece7dc;
+    --ink-soft: #bdb6a7;
+    --ink-faint: #837c70;
+
+    --rule: #34312a;
+    --rule-strong: #46423a;
+
+    --accent: #7fa5d6;
+    --accent-deep: #a8c4e6;
+    --accent-wash: #1c2635;
+    --accent-ink: #10151f;
+    --positive: #8fbb93;
+    --positive-wash: #1c2a1e;
+    --negative: #d98f8f;
+    --negative-wash: #2e1c1c;
+    --caution: #d9b25c;
+    --caution-wash: #2e260f;
+  }
+}
+
+:root[data-theme='dark'] {
+  --paper: #161512;
+  --paper-raised: #1e1c19;
+  --paper-sunken: #0f0e0c;
+  --ink: #ece7dc;
+  --ink-soft: #bdb6a7;
+  --ink-faint: #837c70;
+
+  --rule: #34312a;
+  --rule-strong: #46423a;
+
+  --accent: #7fa5d6;
+  --accent-deep: #a8c4e6;
+  --accent-wash: #1c2635;
+  --positive: #8fbb93;
+  --positive-wash: #1c2a1e;
+  --negative: #d98f8f;
+  --negative-wash: #2e1c1c;
+  --caution: #d9b25c;
+  --caution-wash: #2e260f;
 }
 
 *,
@@ -56,6 +107,7 @@ body {
   font-size: 15px;
   line-height: 1.6;
   -webkit-font-smoothing: antialiased;
+  transition: background-color 0.15s ease, color 0.15s ease;
 }
 
 h1,
@@ -243,7 +295,7 @@ code {
 .button--primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent-ink);
 }
 
 .button--primary:hover:not(:disabled) {
@@ -481,6 +533,13 @@ code {
   padding: 2.75rem 0;
 }
 
+.action-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
 .action-note {
   font-size: 0.82rem;
   color: var(--ink-faint);
@@ -689,7 +748,7 @@ code {
   padding: 0.1rem 0.5rem;
   background: var(--positive-wash);
   color: var(--positive);
-  border: 1px solid #c9d8c9;
+  border: 1px solid var(--positive);
   border-radius: var(--radius);
   font-family: var(--mono);
   font-size: 0.72rem;

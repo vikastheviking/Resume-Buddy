@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { downloadExport, getSample, optimize } from './api';
+import { downloadExport, getSample, optimize, scoreResume, setToken } from './api';
 import { renderResumeMarkdown } from './markdown.jsx';
 import AuditPanel from './components/AuditPanel';
 import AuthDialog from './components/AuthDialog';
@@ -7,12 +7,21 @@ import DocumentInput from './components/DocumentInput';
 import ScorePanel from './components/ScorePanel';
 
 const AUTH_STORAGE_KEY = 'resume_buddy_user';
+const THEME_STORAGE_KEY = 'resume_buddy_theme';
 
 function readStoredUser() {
   try {
     return localStorage.getItem(AUTH_STORAGE_KEY);
   } catch {
     return null; // private browsing, or site data blocked
+  }
+}
+
+function readStoredTheme() {
+  try {
+    return localStorage.getItem(THEME_STORAGE_KEY); // 'light' | 'dark' | null (follow system)
+  } catch {
+    return null;
   }
 }
 
@@ -27,6 +36,9 @@ export default function App() {
   const [authPrompt, setAuthPrompt] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [toast, setToast] = useState(null);
+  const [theme, setTheme] = useState(readStoredTheme);
+  const [quickScore, setQuickScore] = useState(null);
+  const [checkingScore, setCheckingScore] = useState(false);
 
   const resultsRef = useRef(null);
   const toastTimer = useRef(0);
@@ -39,9 +51,27 @@ export default function App() {
 
   useEffect(() => () => clearTimeout(toastTimer.current), []);
 
+  useEffect(() => {
+    if (theme) document.documentElement.setAttribute('data-theme', theme);
+    else document.documentElement.removeAttribute('data-theme');
+  }, [theme]);
+
+  const toggleTheme = () => {
+    const systemPrefersDark = window.matchMedia?.('(prefers-color-scheme: dark)').matches;
+    const current = theme || (systemPrefersDark ? 'dark' : 'light');
+    const next = current === 'dark' ? 'light' : 'dark';
+    setTheme(next);
+    try {
+      localStorage.setItem(THEME_STORAGE_KEY, next);
+    } catch {
+      /* per-viewer preference only */
+    }
+  };
+
   const signIn = useCallback(
-    (email) => {
+    (email, token) => {
       setUser(email);
+      setToken(token || null);
       try {
         localStorage.setItem(AUTH_STORAGE_KEY, email);
       } catch {
@@ -55,6 +85,7 @@ export default function App() {
 
   const signOut = () => {
     setUser(null);
+    setToken(null);
     try {
       localStorage.removeItem(AUTH_STORAGE_KEY);
     } catch {
@@ -74,6 +105,40 @@ export default function App() {
       notify(error.message);
     } finally {
       setLoadingSample(false);
+    }
+  };
+
+  /** True (and prompts sign-in again) when `error` is the server rejecting a missing/expired session. */
+  const recoverFromAuthError = useCallback(
+    (error) => {
+      if (!/session has expired|sign in to use/i.test(error.message)) return false;
+      setUser(null);
+      setToken(null);
+      try {
+        localStorage.removeItem(AUTH_STORAGE_KEY);
+      } catch {
+        /* nothing to clear */
+      }
+      setAuthPrompt('Your session expired. Please sign in again to continue.');
+      setAuthOpen(true);
+      return true;
+    },
+    [],
+  );
+
+  const checkScore = async () => {
+    if (!resumeText.trim() || !jdText.trim()) {
+      notify('Add both a resume and a job description first.');
+      return;
+    }
+    setCheckingScore(true);
+    try {
+      const data = await scoreResume(resumeText, jdText);
+      setQuickScore(data.overall_score);
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setCheckingScore(false);
     }
   };
 
@@ -100,7 +165,7 @@ export default function App() {
       );
       requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
     } catch (error) {
-      notify(error.message);
+      if (!recoverFromAuthError(error)) notify(error.message);
     } finally {
       setBusy(false);
     }
@@ -123,7 +188,7 @@ export default function App() {
       await downloadExport(format, result.optimized_resume);
       notify(`${format.toUpperCase()} downloaded.`);
     } catch (error) {
-      notify(error.message);
+      if (!recoverFromAuthError(error)) notify(error.message);
     } finally {
       setExporting(null);
     }
@@ -141,6 +206,14 @@ export default function App() {
           </div>
 
           <nav className="masthead-actions">
+            <button
+              type="button"
+              className="button button--ghost"
+              onClick={toggleTheme}
+              aria-label={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+            >
+              {theme === 'dark' ? 'Light mode' : 'Dark mode'}
+            </button>
             <button type="button" className="button button--ghost" onClick={loadSample} disabled={loadingSample}>
               {loadingSample ? 'Loading…' : 'Load example'}
             </button>
@@ -203,9 +276,24 @@ export default function App() {
         </div>
 
         <div className="action">
-          <button type="button" className="button button--primary button--large" onClick={runOptimization} disabled={busy}>
-            {busy ? 'Optimizing…' : 'Optimize resume'}
-          </button>
+          <div className="action-buttons">
+            <button
+              type="button"
+              className="button button--ghost"
+              onClick={checkScore}
+              disabled={checkingScore || busy}
+            >
+              {checkingScore ? 'Checking…' : 'Check score'}
+            </button>
+            <button type="button" className="button button--primary button--large" onClick={runOptimization} disabled={busy}>
+              {busy ? 'Optimizing…' : 'Optimize resume'}
+            </button>
+          </div>
+          {quickScore !== null && !busy && !result && (
+            <p className="action-note" role="status">
+              Baseline match: <strong>{quickScore}%</strong> — sign in and optimize to close the gap.
+            </p>
+          )}
           {busy && (
             <p className="action-note" role="status">
               Extracting keywords, rewriting bullets and scoring alignment. This can take up to a minute.

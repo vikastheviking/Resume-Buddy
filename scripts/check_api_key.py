@@ -14,21 +14,26 @@ import requests
 
 ENDPOINTS = {
     "1": {
+        "name": "Google Gemini (OpenAI Endpoint)",
+        "url": "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+        "model": "gemini-3.6-flash"
+    },
+    "2": {
+        "name": "Groq Cloud",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "model": "groq/compound"
+    },
+    "3": {
         "name": "DeepSeek Official API",
         "url": "https://api.deepseek.com/chat/completions",
         "model": "deepseek-chat"
     },
-    "2": {
+    "4": {
         "name": "NVIDIA NIM",
         "url": "https://integrate.api.nvidia.com/v1/chat/completions",
         "model": "deepseek-ai/deepseek-r1"
     },
-    "3": {
-        "name": "Groq Cloud",
-        "url": "https://api.groq.com/openai/v1/chat/completions",
-        "model": "llama-3.3-70b-versatile"
-    },
-    "4": {
+    "5": {
         "name": "SiliconFlow (DeepSeek host)",
         "url": "https://api.siliconflow.cn/v1/chat/completions",
         "model": "deepseek-ai/DeepSeek-V3"
@@ -121,7 +126,7 @@ if __name__ == "__main__":
         for k, v in ENDPOINTS.items():
             print(f"  [{k}] {v['name']} ({v['model']})")
         
-        choice = input("\nEnter choice (1-4) [default: 1]: ").strip() or "1"
+        choice = input(f"\nEnter choice (1-{len(ENDPOINTS)}) [default: 1]: ").strip() or "1"
         key = input("Enter your API Key: ").strip()
         
         if not key:

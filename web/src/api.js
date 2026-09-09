@@ -6,12 +6,36 @@
  * readable message rather than a JSON parse exception surfacing in the UI.
  */
 
-async function request(path, { method = 'GET', body, isForm = false } = {}) {
+const TOKEN_STORAGE_KEY = 'resume_buddy_token';
+
+export function getToken() {
+  try {
+    return localStorage.getItem(TOKEN_STORAGE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+export function setToken(token) {
+  try {
+    if (token) localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    else localStorage.removeItem(TOKEN_STORAGE_KEY);
+  } catch {
+    /* session-only auth is an acceptable fallback */
+  }
+}
+
+async function request(path, { method = 'GET', body, isForm = false, auth = false } = {}) {
   let response;
   try {
+    const headers = isForm ? {} : { 'Content-Type': 'application/json' };
+    if (auth) {
+      const token = getToken();
+      if (token) headers.Authorization = `Bearer ${token}`;
+    }
     response = await fetch(path, {
       method,
-      headers: isForm ? undefined : { 'Content-Type': 'application/json' },
+      headers,
       body: isForm ? body : body && JSON.stringify(body),
     });
   } catch {
@@ -46,6 +70,14 @@ export const optimize = (resumeText, jdText) =>
   request('/api/optimize', {
     method: 'POST',
     body: { resume_text: resumeText, jd_text: jdText },
+    auth: true,
+  });
+
+/** Baseline match score only — no rewrite, no sign-in required. */
+export const scoreResume = (resumeText, jdText) =>
+  request('/api/score', {
+    method: 'POST',
+    body: { resume_text: resumeText, jd_text: jdText },
   });
 
 export const validateEmail = (email) =>
@@ -57,6 +89,8 @@ export const sendOtp = (email, mode) =>
 export const verifyOtp = (email, otp) =>
   request('/api/auth/verify-otp', { method: 'POST', body: { email, otp } });
 
+export const guestSession = () => request('/api/auth/guest', { method: 'POST' });
+
 /**
  * Ask the server to render the resume and hand the file to the browser.
  *
@@ -64,14 +98,25 @@ export const verifyOtp = (email, otp) =>
  * download directly.
  */
 export async function downloadExport(format, markdownText) {
+  const headers = { 'Content-Type': 'application/json' };
+  const token = getToken();
+  if (token) headers.Authorization = `Bearer ${token}`;
+
   const response = await fetch(`/api/export/${format}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify({ markdown_text: markdownText }),
   });
 
   if (!response.ok) {
-    throw new Error(`Could not generate the ${format.toUpperCase()} file.`);
+    let message = `Could not generate the ${format.toUpperCase()} file.`;
+    try {
+      const data = await response.json();
+      if (data?.error) message = data.error;
+    } catch {
+      /* non-JSON error body: keep the generic message */
+    }
+    throw new Error(message);
   }
 
   const blob = await response.blob();

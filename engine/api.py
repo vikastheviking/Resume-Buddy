@@ -35,8 +35,15 @@ async def health_check(request: Request) -> JSONResponse:
 
 async def get_sample_data(request: Request) -> JSONResponse:
     """Returns sample profile data for instant 1-click evaluation."""
-    profile_key = request.query_params.get("key", list(SAMPLE_JOBS.keys())[0])
-    data = SAMPLE_JOBS.get(profile_key, list(SAMPLE_JOBS.values())[0])
+    # An empty ?key= (the Node layer sends one whenever the caller didn't ask for a
+    # specific profile) must fall back exactly like a missing key — `.get("key", default)`
+    # does not do that on its own, since "" is still a present value, not a missing one.
+    # An unrecognised key falls back the same way, and profile_name always names whichever
+    # profile's resume/jd are actually being returned, never the raw (possibly bogus) input.
+    requested_key = request.query_params.get("key") or ""
+    default_key = list(SAMPLE_JOBS.keys())[0]
+    profile_key = requested_key if requested_key in SAMPLE_JOBS else default_key
+    data = SAMPLE_JOBS[profile_key]
     return JSONResponse({
         "profile_name": profile_key,
         "available_profiles": list(SAMPLE_JOBS.keys()),
@@ -90,13 +97,19 @@ def _audit_summary(audit: Dict[str, Any]) -> Dict[str, Any]:
     """Project a scorer audit onto the fields the API exposes, using the scorer's own keys."""
     return {
         "overall_score": audit.get("overall_score", 0),
+        "ats_score": audit.get("ats_score", audit.get("overall_score", 0)),
+        "score_breakdown": audit.get("score_breakdown", {}),
         "keyword_score": audit.get("keyword_score", 0),
         "semantic_score": audit.get("semantic_score", 0),
         "impact_score": audit.get("impact_score", 0),
         "format_score": audit.get("format_score", 0),
         "matched_count": len(audit.get("matched_keywords", [])),
         "missing_count": len(audit.get("missing_keywords", [])),
+        "matched_keywords": audit.get("matched_keywords", []),
+        "gap_keywords": audit.get("gap_keywords", audit.get("missing_keywords", [])),
+        "revision_log": audit.get("revision_log", []),
         "format_alerts": audit.get("format_alerts", []),
+        "writing_tips": audit.get("writing_tips", []),
     }
 
 
@@ -104,8 +117,8 @@ async def optimize_endpoint(request: Request) -> JSONResponse:
     """
     Executes full optimization:
     1. Evaluates baseline resume against JD -> Actual ATS Score
-    2. Runs Groq Llama-3.3-70B optimization with STAR metrics and ATS keywords
-    3. Evaluates optimized resume against JD -> Updated ATS Score
+    2. Runs ATS Resume Optimization Engine (Llama-3.3-70B / Gemini / UnifiedLLM) with strict rules & multi-pass self-audit
+    3. Evaluates optimized resume against JD -> Updated ATS Score and schema breakdown
     """
     try:
         body = await request.json()
@@ -127,9 +140,14 @@ async def optimize_endpoint(request: Request) -> JSONResponse:
             llm_client=llm_client,
             baseline_audit=baseline_audit
         )
-        updated_score = optimized_audit.get("overall_score", 0)
+        updated_score = optimized_audit.get("ats_score", optimized_audit.get("overall_score", 0))
 
         return JSONResponse({
+            "ats_score": updated_score,
+            "score_breakdown": optimized_audit.get("score_breakdown", {}),
+            "matched_keywords": optimized_audit.get("matched_keywords", []),
+            "gap_keywords": optimized_audit.get("gap_keywords", optimized_audit.get("missing_keywords", [])),
+            "revision_log": optimized_audit.get("revision_log", []),
             "actual_score": actual_score,
             "updated_score": updated_score,
             "score_boost": updated_score - actual_score,
@@ -138,12 +156,15 @@ async def optimize_endpoint(request: Request) -> JSONResponse:
                 **_audit_summary(optimized_audit),
                 "injected_keywords": optimized_audit.get("injected_keywords", []),
                 "engine_used": optimized_audit.get("engine_used", ""),
+                "rewrite_status": optimized_audit.get("rewrite_status", ""),
             },
-            "optimized_resume": optimized_resume
+            "optimized_resume": optimized_resume,
+            "optimized_resume_object": optimized_audit.get("optimized_resume", {})
         })
     except Exception as e:
         logger.error(f"Optimization error: {e}", exc_info=True)
         return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
+
 
 
 async def export_pdf(request: Request) -> Response:

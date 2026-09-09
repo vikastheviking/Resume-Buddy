@@ -46,6 +46,18 @@ class TestKeywordExtraction:
         assert "api" in found
         assert "api testing" in found
 
+    def test_excludes_job_portal_metadata_footer_tokens(self):
+        """
+        Naukri.com-style postings append a metadata footer below the real JD content
+        (Industry Type, Education level, etc.) — "IT" and "UG" there describe the
+        listing itself, not a skill the candidate is missing, and must not be scored
+        as a required keyword.
+        """
+        found = extract_keywords_from_text(
+            "Industry Type: IT Services & Consulting\nEducation\nUG: Any Graduate"
+        )
+        assert not ({"it", "ug"} & found)
+
 
 class TestKeywordMatching:
     def test_term_nested_in_a_longer_term_still_counts(self):

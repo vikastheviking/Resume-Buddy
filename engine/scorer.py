@@ -13,6 +13,8 @@ import re
 from functools import lru_cache
 from typing import Dict, Any, List, Set
 
+from engine.extractor import parse_resume_sections
+
 
 COMMON_SKILLS_TAXONOMY = {
     # Software & Web
@@ -71,6 +73,13 @@ _ACRONYM_STOPWORDS = {
     "OBJECTIVE", "ABOUT", "TEAM", "WORK", "JOB", "PLUS", "NEW", "KEY", "TOP", "END", "PER",
     "ONE", "TWO", "YEARS", "YEAR", "MONTH", "DAY", "TIME", "GOOD", "STRONG", "ABLE", "SELF",
     "NOTE", "ETC", "EG", "IE", "LTD", "INC", "CV",
+    # Job-portal posting metadata (Naukri.com and similar sites append a footer like
+    # "Industry Type: IT Services & Consulting" / "Education\nUG: Any Graduate" below the
+    # real JD content) — these are page furniture describing the listing, not a required
+    # skill the candidate is missing, but the bare acronym regex can't tell the two apart.
+    # A bare "IT" is virtually always this kind of noise too ("IT Services", "IT Industry")
+    # rather than a real standalone skill requirement.
+    "UG", "PG", "IT",
 }
 
 
@@ -236,6 +245,61 @@ def _terms_present_in(terms: Set[str], haystack: str) -> Set[str]:
     return found
 
 
+_WEAK_BULLET_START_RE = re.compile(
+    r"^(responsible for|worked on|helped (with|to)|involved in|assisted with|in charge of"
+    r"|tasked with|duties include[ds]?|participated in)\b",
+    re.IGNORECASE,
+)
+_MAX_BULLET_LENGTH = 220
+
+
+def _extract_bullets(section_text: str) -> List[str]:
+    """Bullet lines (leading -, • or *) out of one section's raw text."""
+    bullets = []
+    for line in section_text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith(("-", "•", "*")):
+            body = stripped.lstrip("-•* ").strip()
+            if body:
+                bullets.append(body)
+    return bullets
+
+
+def evaluate_bullet_quality(resume_text: str) -> List[str]:
+    """
+    Writing-quality nudges independent of keyword matching: does each bullet carry a
+    verifiable number, and does it open with a strong verb rather than a passive phrase?
+    Purely observational — these are suggestions for the candidate to act on, not
+    something the scorer feeds into overall_score.
+    """
+    sections = parse_resume_sections(resume_text)
+    bullets = _extract_bullets(sections.get("experience", "")) + _extract_bullets(sections.get("projects", ""))
+    if not bullets:
+        return []
+
+    no_metric = sum(1 for b in bullets if not any(p.search(b) for p in _METRIC_PATTERNS))
+    weak_start = sum(1 for b in bullets if _WEAK_BULLET_START_RE.match(b))
+    too_long = sum(1 for b in bullets if len(b) > _MAX_BULLET_LENGTH)
+
+    tips: List[str] = []
+    if no_metric:
+        tips.append(
+            f"{no_metric} of {len(bullets)} experience/project bullets have no quantified result "
+            "(a %, $, count or duration) — a number makes impact verifiable to both ATS and recruiters."
+        )
+    if weak_start:
+        plural = "bullets open" if weak_start > 1 else "bullet opens"
+        tips.append(
+            f"{weak_start} {plural} with a passive phrase (\"responsible for\", \"worked on\") "
+            "instead of a strong action verb."
+        )
+    if too_long:
+        plural = "bullets run" if too_long > 1 else "bullet runs"
+        tips.append(f"{too_long} {plural} over {_MAX_BULLET_LENGTH} characters — split for readability.")
+
+    return tips
+
+
 def extract_quantifiable_metrics(text: str) -> List[str]:
     """Identify numbers, percentages and quantified outcomes that evidence impact."""
     matches: List[str] = []
@@ -253,8 +317,9 @@ def evaluate_resume_ats(
     Score a resume against a job description.
 
     Returns overall_score plus the four component scores and the evidence behind them.
-    The overall score is a weighted blend: keywords 45%, semantic 30%, impact 15%,
-    format 10%.
+    The overall score is the sum of score_breakdown: hard-skill keyword coverage 40%,
+    job title/domain alignment 15%, section structure 15%, soft-skill coverage 10%,
+    formatting 10%, quantified impact 10%.
     """
     if not resume_text.strip() or not jd_text.strip():
         return {
@@ -267,6 +332,7 @@ def evaluate_resume_ats(
             "missing_keywords": [],
             "metrics_found": [],
             "format_alerts": ["Resume or job description is empty."],
+            "writing_tips": [],
         }
 
     resume_lower = resume_text.lower()
@@ -331,22 +397,52 @@ def evaluate_resume_ats(
 
     format_score = min(100, format_score)
 
-    overall_score = round(
-        0.45 * keyword_score
-        + 0.30 * semantic_score
-        + 0.15 * impact_score
-        + 0.10 * format_score
-    )
+    # Calculate 6-part scoring breakdown per ATS Optimization Engine Rubric:
+    # 1. Hard skill / tool keyword coverage (40% max)
+    hard_skill_coverage = round(keyword_ratio * 40)
+
+    # 2. Job title & domain phrase alignment (15% max)
+    # Check domain phrase / action verb alignment ratio
+    domain_ratio = min(1.0, (keyword_ratio * 0.6 + action_match * 0.4))
+    job_title_domain_alignment = round(domain_ratio * 15)
+
+    # 3. Section structure & header compliance (15% max)
+    structure_format_compliance = round((headers_found / max(1, len(STANDARD_HEADERS))) * 15)
+
+    # 4. Soft skill / qualification coverage (10% max)
+    soft_skill_coverage = round(min(1.0, action_match) * 10)
+
+    # 5. Formatting / parseability compliance (10% max)
+    formatting_parseability = round((format_score / 100.0) * 10)
+
+    # 6. Quantified impact / metrics evidence (10% max)
+    quantified_impact = round((impact_score / 100.0) * 10)
+
+    score_breakdown = {
+        "hard_skill_keyword_coverage": max(0, min(40, hard_skill_coverage)),
+        "job_title_domain_alignment": max(0, min(15, job_title_domain_alignment)),
+        "structure_format_compliance": max(0, min(15, structure_format_compliance)),
+        "soft_skill_qualification_coverage": max(0, min(10, soft_skill_coverage)),
+        "formatting_parseability": max(0, min(10, formatting_parseability)),
+        "quantified_impact_metrics": max(0, min(10, quantified_impact)),
+    }
+
+    overall_score = sum(score_breakdown.values())
     overall_score = max(0, min(100, overall_score))
 
     return {
         "overall_score": overall_score,
+        "ats_score": overall_score,
+        "score_breakdown": score_breakdown,
         "keyword_score": keyword_score,
         "semantic_score": semantic_score,
         "impact_score": impact_score,
         "format_score": format_score,
         "matched_keywords": sorted(matched),
         "missing_keywords": sorted(missing),
+        "gap_keywords": sorted(missing),
         "metrics_found": metrics_found,
         "format_alerts": format_alerts,
+        "writing_tips": evaluate_bullet_quality(resume_text),
     }
+

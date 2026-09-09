@@ -14,10 +14,12 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
+const crypto = require('crypto');
 const multer = require('multer');
 const { spawn } = require('child_process');
 const { verifyRealEmail } = require('./email-validator');
 const { createAndSendOtp, verifyOtp } = require('./otp-service');
+const { createSessionToken, requireAuth } = require('./sessions');
 require('dotenv').config();
 
 // Repo root: this file lives in server/, everything else resolves from one level up.
@@ -362,10 +364,21 @@ app.post('/api/auth/verify-otp', authLimiter, async (req, res) => {
       message: 'Email successfully verified.',
       email: verification.email,
       mode: verification.mode,
+      token: createSessionToken(verification.email),
     });
   } catch (err) {
     return fail(res, 500, 'Could not verify that code.', err, 'success');
   }
+});
+
+// Anonymous access still needs a real session token — otherwise every protected route
+// would have to choose between locking guests out entirely or accepting no proof of
+// auth at all, which is the gap this whole session layer exists to close. Guest tokens
+// are tagged distinctly from verified-email tokens so logs and future limits can tell
+// them apart, and issuing one is itself rate-limited by authLimiter.
+app.post('/api/auth/guest', authLimiter, (req, res) => {
+  const guestEmail = `guest+${crypto.randomBytes(8).toString('hex')}@resume-buddy.local`;
+  res.json({ success: true, email: guestEmail, token: createSessionToken(guestEmail) });
 });
 
 app.post('/api/auth/signup', authLimiter, async (req, res) => {
@@ -391,7 +404,16 @@ app.post('/api/auth/signup', authLimiter, async (req, res) => {
 app.post('/api/auth/login', authLimiter, async (req, res) => {
   try {
     const { email, password } = req.body || {};
-    return await proxyJson(res, '/api/auth/login', { email, password }, { label: 'login' });
+    const engineRes = await engineFetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+    const data = await engineRes.json();
+    if (engineRes.ok && data.success && data.email) {
+      data.token = createSessionToken(data.email);
+    }
+    return res.status(engineRes.status).json(data);
   } catch (err) {
     return fail(res, 502, 'Could not sign you in.', err, 'success');
   }
@@ -418,7 +440,22 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-app.post('/api/optimize', optimizeLimiter, async (req, res) => {
+// Scoring alone costs no LLM tokens — it's pure local computation — so unlike
+// /api/optimize it stays free of the auth gate. A visitor can see how their resume
+// actually matches a job before committing to sign in for the full rewrite.
+app.post('/api/score', async (req, res) => {
+  try {
+    const { resume_text: resumeText, jd_text: jdText } = req.body || {};
+    if (!resumeText || !jdText) {
+      return res.status(400).json({ error: 'Both resume_text and jd_text are required.' });
+    }
+    return await proxyJson(res, '/api/score', { resume_text: resumeText, jd_text: jdText }, { label: 'score' });
+  } catch (err) {
+    return fail(res, 502, 'Could not score that resume.', err);
+  }
+});
+
+app.post('/api/optimize', requireAuth, optimizeLimiter, async (req, res) => {
   try {
     const { resume_text: resumeText, jd_text: jdText } = req.body || {};
     if (!resumeText || !jdText) {
@@ -440,7 +477,7 @@ app.post('/api/optimize', optimizeLimiter, async (req, res) => {
 
 /** PDF and DOCX exports differ only in route, media type and filename. */
 function registerExport(route, enginePath, mediaType, filename) {
-  app.post(route, async (req, res) => {
+  app.post(route, requireAuth, async (req, res) => {
     try {
       const { markdown_text: markdownText } = req.body || {};
       if (!markdownText || !markdownText.trim()) {

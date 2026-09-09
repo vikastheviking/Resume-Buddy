@@ -38,11 +38,19 @@ def test_entire_pipeline():
     assert baseline["overall_score"] < 75, "Baseline score should realistically reflect unoptimized resume"
     assert len(baseline["missing_keywords"]) > 0, "Should detect missing high-value keywords"
 
-    # 4. Optimization Engine (using Offline / Simulator Mode)
-    client = UnifiedLLMClient(provider="Demo Simulator (Zero-Latency Offline)")
+    # 4. Optimization Engine — live call against whichever of GEMINI_API_KEY /
+    # GROQ_API_KEY is configured in .env. This is not an offline simulator: the client
+    # accepts no such mode, and a `provider=` kwarg here would be silently ignored and
+    # still hit the real network. That's why this test is marked `live` and skipped by
+    # default — run it explicitly with `pytest -m live` once real keys are configured.
+    client = UnifiedLLMClient()
     optimized_text, opt_audit = optimize_resume(resume_text, jd_text, client, baseline)
     print(f"[OK] Optimized ATS Score: {opt_audit['overall_score']}% (Keywords: {opt_audit['keyword_score']}%, Impact: {opt_audit['impact_score']}%)")
-    assert opt_audit["overall_score"] >= 90, f"Target ATS score was not reached: {opt_audit['overall_score']}"
+    # The engine never targets a score (that's the fabrication bug it exists to avoid) —
+    # this only checks the rewrite genuinely improved on the honest baseline.
+    assert opt_audit["overall_score"] > baseline["overall_score"], (
+        f"Rewrite did not improve on baseline: {baseline['overall_score']}% -> {opt_audit['overall_score']}%"
+    )
     assert "EXPERIENCE" in optimized_text, "Missing standard professional experience header"
 
     # 5. Document Exporters

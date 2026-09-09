@@ -124,7 +124,10 @@ def test_end_to_end_fidelity():
     print(f"Baseline Matched Keywords: {baseline['matched_keywords']}")
     print(f"Baseline Missing Keywords ({len(baseline['missing_keywords'])}): {baseline['missing_keywords']}")
 
-    client = UnifiedLLMClient(provider="Demo Simulator (Zero-Latency Offline)")
+    # Live call against whichever of GEMINI_API_KEY / GROQ_API_KEY is configured in
+    # .env — there is no offline simulator mode, so this test is marked `live` and
+    # skipped by default (`pytest -m live` to run it against real keys).
+    client = UnifiedLLMClient()
     optimized_text, opt_audit = optimize_resume(USER_RESUME, USER_JD, client, baseline)
 
     print("\n=== Optimized Resume Output Preview ===")
@@ -146,7 +149,12 @@ def test_end_to_end_fidelity():
     assert "Retrofitted Electric Bike" in optimized_text, "ERROR: Project lost!"
     assert "alexander chen" not in optimized_text.lower(), "ERROR: Fictional name present!"
     assert "berkeley" not in optimized_text.lower(), "ERROR: Fictional university present!"
-    assert opt_audit["overall_score"] >= 90, f"ATS score did not reach 90%: {opt_audit['overall_score']}"
+    # This candidate is a genuine domain switch (electrical engineering -> SQA); an honest
+    # scorer has no obligation to hit 90% when real skill gaps exist. Verify the rewrite
+    # measurably improved on the baseline instead of asserting a fabricated target.
+    assert opt_audit["overall_score"] > baseline["overall_score"], (
+        f"Rewrite did not improve on baseline: {baseline['overall_score']}% -> {opt_audit['overall_score']}%"
+    )
 
     # Verify Export
     pdf = generate_ats_pdf(optimized_text)
@@ -154,7 +162,7 @@ def test_end_to_end_fidelity():
     assert len(pdf) > 1000, "PDF export failed"
     assert len(docx) > 1000, "DOCX export failed"
 
-    print("\nSUCCESS: All authentic details preserved and 90%+ ATS score verified!")
+    print("\nSUCCESS: All authentic details preserved and the honest ATS score improved.")
 
 
 if __name__ == "__main__":
