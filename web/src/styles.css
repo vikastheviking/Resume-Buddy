@@ -1044,6 +1044,58 @@ code {
   }
 }
 
+/* ---------------------------------------------------------------- skill gap plan */
+
+.skill-gap-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr));
+  gap: 1rem;
+}
+
+.skill-gap-card {
+  background: var(--paper-sunken);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 1rem 1.15rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.skill-gap-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+}
+
+.skill-gap-card-head h3 {
+  font-family: var(--serif);
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+
+.skill-gap-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--ink-soft);
+}
+
+.skill-gap-steps li {
+  position: relative;
+  padding-left: 0.9rem;
+}
+
+.skill-gap-steps li::before {
+  content: '—';
+  position: absolute;
+  left: 0;
+  color: var(--ink-faint);
+}
+
 /* ---------------------------------------------------------------- responsive */
 
 @media (max-width: 900px) {

@@ -80,6 +80,14 @@ export const scoreResume = (resumeText, jdText) =>
     body: { resume_text: resumeText, jd_text: jdText },
   });
 
+/** A coaching plan for closing genuine skill gaps — never rewrites the resume. */
+export const getSkillGapPlan = (jdText, gapKeywords) =>
+  request('/api/skill-gap-plan', {
+    method: 'POST',
+    body: { jd_text: jdText, gap_keywords: gapKeywords },
+    auth: true,
+  });
+
 export const validateEmail = (email) =>
   request('/api/auth/validate-email', { method: 'POST', body: { email } });
 

@@ -22,6 +22,7 @@ from engine.exporter import generate_ats_pdf, generate_ats_docx
 from engine.sample_data import SAMPLE_JOBS
 from engine.llm_client import BackendLLMClient
 from engine.auth import login_user, signup_user, ensure_user
+from engine.skill_gap import generate_skill_gap_plan
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("ats-api")
@@ -166,6 +167,22 @@ async def optimize_endpoint(request: Request) -> JSONResponse:
         return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
+async def skill_gap_plan_endpoint(request: Request) -> JSONResponse:
+    """Generates a coaching plan for the JD keywords the resume shows no evidence of."""
+    try:
+        body = await request.json()
+        jd_text = body.get("jd_text", "").strip()
+        gap_keywords = body.get("gap_keywords", [])
+        if not jd_text or not isinstance(gap_keywords, list) or not gap_keywords:
+            return JSONResponse({"error": "jd_text and a non-empty gap_keywords list are required"}, status_code=400)
+
+        llm_client = BackendLLMClient()
+        result = generate_skill_gap_plan(gap_keywords, jd_text, llm_client)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Skill-gap plan error: {e}", exc_info=True)
+        return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
+
 
 async def export_pdf(request: Request) -> Response:
     """Generates and streams an ATS-compliant PDF."""
@@ -262,6 +279,7 @@ routes = [
     Route("/api/extract", extract_file, methods=["POST"]),
     Route("/api/score", score_resume, methods=["POST"]),
     Route("/api/optimize", optimize_endpoint, methods=["POST"]),
+    Route("/api/skill-gap-plan", skill_gap_plan_endpoint, methods=["POST"]),
     Route("/api/export/pdf", export_pdf, methods=["POST"]),
     Route("/api/export/docx", export_docx, methods=["POST"]),
     Route("/api/auth/signup", auth_signup, methods=["POST"]),

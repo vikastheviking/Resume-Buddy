@@ -146,32 +146,34 @@ const authLimiter = rateLimit({
 app.use('/api/', generalLimiter);
 
 // ---------------------------------------------------------------------------
-// 2b. Global daily AI-rewrite budget
+// 2b. Global daily LLM-call budget
 // ---------------------------------------------------------------------------
 //
 // The per-IP optimizeLimiter above bounds any one visitor, but not the total across
 // everyone — Gemini/Groq's free tiers have a shared daily quota per account, not per
 // visitor, so a link that gets shared around can burn through it. Once that happens,
-// every further /api/optimize call would otherwise fail the LLM call and silently fall
-// back to the non-AI structural reformat, which looks like the app breaking rather than
+// every further LLM-backed call would otherwise fail and silently fall back (optimize)
+// or come back empty (skill-gap plan), which looks like the app breaking rather than
 // what it actually is (today's free quota being used up). This turns that into an
 // explicit, friendly message instead, and — since it's checked before proxying to the
-// engine — stops those calls from ever reaching the LLM provider at all.
-const DAILY_OPTIMIZE_LIMIT = Number(process.env.DAILY_OPTIMIZE_LIMIT || 150);
-let optimizeBudget = { count: 0, resetAt: nextUtcMidnight() };
+// engine — stops those calls from ever reaching the LLM provider at all. Shared across
+// every LLM-backed route (optimize, skill-gap plan), not per-route, since they draw on
+// the same underlying provider quota.
+const DAILY_LLM_CALL_LIMIT = Number(process.env.DAILY_LLM_CALL_LIMIT || 150);
+let llmBudget = { count: 0, resetAt: nextUtcMidnight() };
 
 function nextUtcMidnight() {
   const now = new Date();
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() + 1);
 }
 
-/** True and increments the counter if today's AI-rewrite budget has room; false if not. */
-function tryConsumeOptimizeBudget() {
-  if (Date.now() >= optimizeBudget.resetAt) {
-    optimizeBudget = { count: 0, resetAt: nextUtcMidnight() };
+/** True and increments the counter if today's shared LLM-call budget has room; false if not. */
+function tryConsumeLlmBudget() {
+  if (Date.now() >= llmBudget.resetAt) {
+    llmBudget = { count: 0, resetAt: nextUtcMidnight() };
   }
-  if (optimizeBudget.count >= DAILY_OPTIMIZE_LIMIT) return false;
-  optimizeBudget.count += 1;
+  if (llmBudget.count >= DAILY_LLM_CALL_LIMIT) return false;
+  llmBudget.count += 1;
   return true;
 }
 
@@ -491,7 +493,7 @@ app.post('/api/optimize', requireAuth, optimizeLimiter, async (req, res) => {
     if (!resumeText || !jdText) {
       return res.status(400).json({ error: 'Both resume_text and jd_text are required.' });
     }
-    if (!tryConsumeOptimizeBudget()) {
+    if (!tryConsumeLlmBudget()) {
       return res.status(429).json({
         error: "Today's free AI-rewrite quota has been used up so the app stays free for "
           + 'everyone. Try "Check score" for a free baseline check, or come back tomorrow '
@@ -509,6 +511,32 @@ app.post('/api/optimize', requireAuth, optimizeLimiter, async (req, res) => {
       return fail(res, 504, 'Optimization timed out. Please try again.', err);
     }
     return fail(res, 502, 'The optimization engine is unavailable.', err);
+  }
+});
+
+app.post('/api/skill-gap-plan', requireAuth, optimizeLimiter, async (req, res) => {
+  try {
+    const { jd_text: jdText, gap_keywords: gapKeywords } = req.body || {};
+    if (!jdText || !Array.isArray(gapKeywords) || gapKeywords.length === 0) {
+      return res.status(400).json({ error: 'jd_text and a non-empty gap_keywords list are required.' });
+    }
+    if (!tryConsumeLlmBudget()) {
+      return res.status(429).json({
+        error: "Today's free AI quota has been used up so the app stays free for everyone. "
+          + 'Please come back tomorrow for a skill-gap plan.',
+      });
+    }
+    return await proxyJson(
+      res,
+      '/api/skill-gap-plan',
+      { jd_text: jdText, gap_keywords: gapKeywords },
+      { timeoutMs: OPTIMIZE_TIMEOUT_MS, label: 'skill-gap-plan' },
+    );
+  } catch (err) {
+    if (isAbort(err)) {
+      return fail(res, 504, 'Generating the skill-gap plan timed out. Please try again.', err);
+    }
+    return fail(res, 502, 'The skill-gap plan engine is unavailable.', err);
   }
 });
 

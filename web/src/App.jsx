@@ -5,6 +5,7 @@ import AuditPanel from './components/AuditPanel';
 import AuthDialog from './components/AuthDialog';
 import DocumentInput from './components/DocumentInput';
 import ScorePanel from './components/ScorePanel';
+import SkillGapPlan from './components/SkillGapPlan';
 
 const AUTH_STORAGE_KEY = 'resume_buddy_user';
 const THEME_STORAGE_KEY = 'resume_buddy_theme';
@@ -340,6 +341,13 @@ export default function App() {
 
               <article className="sheet">{renderResumeMarkdown(result.optimized_resume)}</article>
             </section>
+
+            <SkillGapPlan
+              gapKeywords={result.optimized_audit.gap_keywords}
+              jdText={jdText}
+              onAuthError={recoverFromAuthError}
+              onNotify={notify}
+            />
           </div>
         )}
       </main>
