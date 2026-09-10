@@ -91,10 +91,58 @@ function getTransporter() {
 }
 
 /**
+ * Sends via Resend's HTTPS API (https://resend.com) rather than SMTP.
+ *
+ * Some hosts (Render's free tier among them) block or throttle outbound SMTP entirely,
+ * so a Gmail/SMTP-based send there fails outright even with correct credentials. Resend
+ * sends over plain HTTPS instead, which isn't subject to that. Returns null when
+ * RESEND_API_KEY isn't set (caller should fall back to another path); otherwise always
+ * returns a definite {sent, ...} result — a configured-but-failing send must never be
+ * silently treated as "not configured" and swallowed into a different fallback.
+ */
+async function sendViaResend(email, subject, text, html) {
+  const apiKey = process.env.RESEND_API_KEY;
+  if (!apiKey) return null;
+
+  // Resend's shared sandbox sender works without verifying a domain, but can only
+  // deliver to the email address the Resend account itself was signed up with — fine
+  // for testing, not for real visitors. RESEND_FROM (a verified domain's address)
+  // lifts that restriction.
+  const from = process.env.RESEND_FROM || 'ATS Resume Architect <onboarding@resend.dev>';
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10_000);
+  try {
+    const response = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ from, to: [email], subject, text, html }),
+      signal: controller.signal,
+    });
+
+    if (!response.ok) {
+      const body = await response.text().catch(() => '');
+      throw new Error(`Resend API responded ${response.status}: ${body.slice(0, 300)}`);
+    }
+
+    console.log(`[OTP Service] Successfully dispatched real email via Resend to ${email}`);
+    return { sent: true, mode: 'live_email' };
+  } catch (err) {
+    const message = err.name === 'AbortError' ? 'Resend API request timed out' : err.message;
+    console.error('[OTP Service] Failed to send via Resend:', message);
+    return { sent: false, mode: 'resend_error', error: message };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
  * Sends professional branded HTML email with the 6-digit OTP code.
  */
 async function sendOtpEmail(email, otp, mode = 'signup') {
-  const mailer = getTransporter();
   const title = mode === 'signup' ? 'Complete Your Registration' : 'Sign In to Your Account';
 
   const htmlContent = `
@@ -135,6 +183,15 @@ async function sendOtpEmail(email, otp, mode = 'signup') {
     </html>
   `;
 
+  // 1. Resend (HTTPS API) — preferred when configured, since it works on hosts that
+  // block outbound SMTP. Its result is final either way: a configured-but-failing
+  // Resend send must not silently fall through to SMTP or the console-log dev path.
+  const plainText = `Your ATS Resume Architect verification code is: ${otp}. It expires in 10 minutes.`;
+  const resendResult = await sendViaResend(email, `Your Verification Code: ${otp}`, plainText, htmlContent);
+  if (resendResult) return resendResult;
+
+  // 2. SMTP (Gmail App Password or generic SMTP)
+  const mailer = getTransporter();
   if (mailer) {
     const senderEmail = process.env.GMAIL_USER || process.env.SMTP_USER;
     const fromAddress = process.env.SMTP_FROM || (senderEmail ? `"ATS Resume Architect" <${senderEmail}>` : '"ATS Architect" <auth@ats-architect.com>');
@@ -158,9 +215,9 @@ async function sendOtpEmail(email, otp, mode = 'signup') {
     }
   }
 
-  // Development Fallback: no SMTP configured at all (GMAIL_USER/SMTP_HOST unset) —
-  // this is the expected local-dev path, so it's fine to report success here; a
-  // developer running the app themselves can see this console.
+  // 3. Development fallback: no Resend or SMTP configured at all — this is the
+  // expected local-dev path, so it's fine to report success here; a developer
+  // running the app themselves can see this console.
   console.log(`\n========================================================`);
   console.log(`📨 [OTP DISPATCHED - BACKEND TERMINAL LOG]`);
   console.log(`To:        ${email}`);
