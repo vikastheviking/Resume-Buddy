@@ -50,6 +50,11 @@ function getTransporter() {
   const gmailUser = process.env.GMAIL_USER || (process.env.SMTP_USER && process.env.SMTP_USER.includes('@gmail.com') ? process.env.SMTP_USER : null);
   const gmailPass = process.env.GMAIL_APP_PASSWORD || (gmailUser ? process.env.SMTP_PASS : null);
 
+  // Nodemailer's defaults (2min connection, 10min socket) let a filtered/blocked
+  // outbound port hang the whole request for minutes instead of failing fast — some
+  // hosts (Render's free tier among them) block or throttle outbound SMTP entirely.
+  const timeouts = { connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 15_000 };
+
   if (gmailUser && gmailPass) {
     const cleanPass = gmailPass.replace(/\s+/g, '');
     transporter = nodemailer.createTransport({
@@ -57,7 +62,8 @@ function getTransporter() {
       auth: {
         user: gmailUser,
         pass: cleanPass
-      }
+      },
+      ...timeouts,
     });
     console.log(`[OTP Service] Configured live Gmail SMTP sender: ${gmailUser}`);
     return transporter;
@@ -74,7 +80,8 @@ function getTransporter() {
       host,
       port,
       secure: port === 465,
-      auth: { user, pass }
+      auth: { user, pass },
+      ...timeouts,
     });
     console.log(`[OTP Service] Configured live custom SMTP transport with host: ${host}`);
     return transporter;
@@ -143,10 +150,17 @@ async function sendOtpEmail(email, otp, mode = 'signup') {
       return { sent: true, mode: 'live_email' };
     } catch (err) {
       console.error(`[OTP Service] Failed to send via SMTP:`, err.message);
+      // SMTP was configured but genuinely failed (blocked outbound port, bad
+      // credentials, timeout, ...) — this must not fall through to the console-log
+      // path below and claim success. On a real deployment nobody can see that log,
+      // so a fake "sent" here means a verification code the visitor can never enter.
+      return { sent: false, mode: 'smtp_error', error: err.message };
     }
   }
 
-  // Development Fallback: Log strictly to backend console (never returned to browser)
+  // Development Fallback: no SMTP configured at all (GMAIL_USER/SMTP_HOST unset) —
+  // this is the expected local-dev path, so it's fine to report success here; a
+  // developer running the app themselves can see this console.
   console.log(`\n========================================================`);
   console.log(`📨 [OTP DISPATCHED - BACKEND TERMINAL LOG]`);
   console.log(`To:        ${email}`);
@@ -202,6 +216,16 @@ async function createAndSendOtp(email, mode = 'signup') {
   });
 
   const sendResult = await sendOtpEmail(cleanEmail, otp, mode);
+
+  if (!sendResult.sent) {
+    // Don't leave a code active for an email that was never delivered — a retry
+    // should mint a fresh one rather than colliding with one nobody received.
+    otpStore.delete(cleanEmail);
+    return {
+      success: false,
+      error: 'Could not send the verification email right now. Please try again in a moment, or continue as a guest instead.',
+    };
+  }
 
   return {
     success: true,
