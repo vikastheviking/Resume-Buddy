@@ -1,45 +1,55 @@
 """
 Authentication & User Account Management Module.
-Uses SQLite and PBKDF2-HMAC-SHA256 salted hashing for local, persistent, zero-dependency authentication.
+
+Stores accounts in Supabase Postgres (table `app_users`) via its REST API
+(PostgREST), using the service_role key server-side. This replaced a local
+SQLite file specifically because Render's free plan disk is ephemeral - every
+redeploy wiped the user table. Passwords are PBKDF2-HMAC-SHA256 salted hashes,
+same as before; only the storage backend changed.
+
+Function signatures and return shapes are unchanged from the SQLite version so
+engine/api.py needs no changes.
 """
 
 import os
 import re
-import sqlite3
 import hashlib
 import secrets
 from datetime import datetime, timezone
 from typing import Tuple, Optional
 
-_REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+import requests
 
-# Runtime state lives outside the source tree; override with RESUME_BUDDY_DATA_DIR
-# to point at a mounted volume in containerised deployments.
-DATA_DIR = os.environ.get("RESUME_BUDDY_DATA_DIR", os.path.join(_REPO_ROOT, "data"))
-DB_PATH = os.path.join(DATA_DIR, "users.db")
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+_REST_URL = f"{SUPABASE_URL}/rest/v1/app_users" if SUPABASE_URL else ""
+_REQUEST_TIMEOUT = 10
 
 
-def get_db_connection() -> sqlite3.Connection:
-    os.makedirs(DATA_DIR, exist_ok=True)
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _headers(prefer: Optional[str] = None) -> dict:
+    headers = {
+        "apikey": SUPABASE_SERVICE_ROLE_KEY,
+        "Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}",
+        "Content-Type": "application/json",
+    }
+    if prefer:
+        headers["Prefer"] = prefer
+    return headers
+
+
+def _require_configured() -> Optional[str]:
+    if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
+        return "Account storage is not configured (SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY missing)."
+    return None
 
 
 def init_db() -> None:
-    """Initialize the users table if it does not exist."""
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                email TEXT UNIQUE NOT NULL,
-                password_hash TEXT NOT NULL,
-                salt TEXT NOT NULL,
-                created_at TIMESTAMP NOT NULL
-            )
-        """)
-        conn.commit()
+    """
+    No-op: the app_users table is created once via supabase_app_users_setup.sql,
+    not at runtime. Kept only so callers written against the old SQLite version
+    don't need to change.
+    """
+    return None
 
 
 def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
@@ -55,9 +65,8 @@ def hash_password(password: str, salt: Optional[str] = None) -> Tuple[str, str]:
     return pw_hash, salt
 
 
-# Local part follows RFC 5322's common atom set. The previous pattern omitted '+', so
-# plus-addressed mailboxes (a+tag@mail.io) were rejected here even though the Node-side
-# validator accepts them — signups passed one layer and failed at the next.
+# Local part follows RFC 5322's common atom set, including '+' for plus-addressing
+# (a+tag@mail.io), which the Node-side validator already accepts.
 _EMAIL_PATTERN = re.compile(
     r"^[a-zA-Z0-9!#$%&'*+/=?^_`{|}~.-]+"
     r"@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
@@ -79,12 +88,28 @@ def is_valid_email(email: str) -> bool:
     return bool(_EMAIL_PATTERN.match(candidate))
 
 
+def _find_user(email: str) -> Optional[dict]:
+    """Returns the app_users row for an email, or None if it doesn't exist."""
+    resp = requests.get(
+        _REST_URL,
+        headers=_headers(),
+        params={"email": f"eq.{email}", "select": "*", "limit": "1"},
+        timeout=_REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    rows = resp.json()
+    return rows[0] if rows else None
+
+
 def signup_user(email: str, password: str) -> Tuple[bool, str]:
     """
     Registers a new user.
     Returns: (success: bool, message: str)
     """
-    init_db()
+    config_error = _require_configured()
+    if config_error:
+        return False, config_error
+
     email_clean = email.strip().lower()
 
     if not is_valid_email(email_clean):
@@ -97,22 +122,22 @@ def signup_user(email: str, password: str) -> Tuple[bool, str]:
     created_at = datetime.now(timezone.utc).isoformat()
 
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
-                (email_clean, pw_hash, salt, created_at)
-            )
-            conn.commit()
+        resp = requests.post(
+            _REST_URL,
+            headers=_headers(prefer="return=minimal"),
+            json={"email": email_clean, "password_hash": pw_hash, "salt": salt, "created_at": created_at},
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 409 or (resp.status_code == 400 and "duplicate key" in resp.text.lower()):
+            return False, "An account with this email already exists. Please sign in."
+        resp.raise_for_status()
         return True, "Account created successfully! You can now log in."
-    except sqlite3.IntegrityError:
-        return False, "An account with this email already exists. Please sign in."
-    except Exception as e:
+    except requests.RequestException as e:
         return False, f"Registration error: {str(e)}"
 
 
 # Sentinel stored in password_hash for accounts that authenticate by OTP only.
-# login_user refuses these, so no password — however it was obtained — opens them.
+# login_user refuses these, so no password - however it was obtained - opens them.
 PASSWORDLESS = "!"
 
 
@@ -124,24 +149,32 @@ def ensure_user(email: str) -> Tuple[bool, str]:
     is proven by controlling the mailbox, so there is nothing for a password check to
     compare against and nothing an attacker can guess.
     """
-    init_db()
+    config_error = _require_configured()
+    if config_error:
+        return False, config_error
+
     email_clean = email.strip().lower()
 
     if not is_valid_email(email_clean):
         return False, "Please provide a valid email address."
 
     try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO users (email, password_hash, salt, created_at) VALUES (?, ?, ?, ?)",
-                (email_clean, PASSWORDLESS, "", datetime.now(timezone.utc).isoformat()),
-            )
-            conn.commit()
+        resp = requests.post(
+            _REST_URL,
+            headers=_headers(prefer="return=minimal"),
+            json={
+                "email": email_clean,
+                "password_hash": PASSWORDLESS,
+                "salt": "",
+                "created_at": datetime.now(timezone.utc).isoformat(),
+            },
+            timeout=_REQUEST_TIMEOUT,
+        )
+        if resp.status_code == 409 or (resp.status_code == 400 and "duplicate key" in resp.text.lower()):
+            return True, "Account already exists."
+        resp.raise_for_status()
         return True, "Account created."
-    except sqlite3.IntegrityError:
-        return True, "Account already exists."
-    except Exception as e:
+    except requests.RequestException as e:
         return False, f"Registration error: {str(e)}"
 
 
@@ -150,16 +183,19 @@ def login_user(email: str, password: str) -> Tuple[bool, str]:
     Verifies user credentials.
     Returns: (success: bool, message: str)
     """
-    init_db()
+    config_error = _require_configured()
+    if config_error:
+        return False, config_error
+
     email_clean = email.strip().lower()
 
     if not email_clean or not password:
         return False, "Please enter both email and password."
 
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT password_hash, salt FROM users WHERE email = ?", (email_clean,))
-        user = cursor.fetchone()
+    try:
+        user = _find_user(email_clean)
+    except requests.RequestException as e:
+        return False, f"Could not verify credentials right now: {str(e)}"
 
     if not user:
         return False, "No account found with this email. Please check or create a new account."
@@ -180,9 +216,21 @@ def login_user(email: str, password: str) -> Tuple[bool, str]:
 
 def get_total_users() -> int:
     """Returns the total number of registered accounts."""
-    init_db()
-    with get_db_connection() as conn:
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) as count FROM users")
-        row = cursor.fetchone()
-        return row["count"] if row else 0
+    config_error = _require_configured()
+    if config_error:
+        return 0
+
+    resp = requests.get(
+        _REST_URL,
+        headers=_headers(prefer="count=exact"),
+        params={"select": "id", "limit": "1"},
+        timeout=_REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    content_range = resp.headers.get("content-range", "")
+    # Format is "0-0/42" (or "*/42" for an empty result) - the total is after the slash.
+    if "/" in content_range:
+        total = content_range.split("/")[-1]
+        if total.isdigit():
+            return int(total)
+    return len(resp.json())

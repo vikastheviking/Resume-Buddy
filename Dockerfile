@@ -55,7 +55,6 @@ ENV NODE_ENV=production
 # stream through the Node parent process instead of sitting in a buffer.
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
-ENV RESUME_BUDDY_DATA_DIR=/app/data
 
 EXPOSE 3000
 

@@ -60,11 +60,16 @@ Render provides free hosting with **automatic HTTPS/SSL certificates** and free 
    - Select your repository.
    - Choose **"Docker"** as the Environment (it automatically detects the included [`Dockerfile`](../Dockerfile)).
    - In **Environment Variables**, add:
-     - `GROQ_API_KEY`: Your Groq API key (`gsk_...`)
+     - `GROQ_API_KEY` and/or `GEMINI_API_KEY`: your LLM provider key(s)
      - `NODE_ENV`: `production`
-     - `RESUME_BUDDY_DATA_DIR` *(optional)*: path to a mounted disk for the
-       SQLite user store. Without a persistent disk the account database is
-       wiped on every redeploy, since Render's filesystem is ephemeral.
+     - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: your Supabase project's
+       API URL and service_role key (Project Settings -> API). Run
+       `supabase_app_users_setup.sql` once in the Supabase SQL Editor first.
+       Accounts are stored there, not on Render's filesystem, so they survive
+       redeploys even without a persistent disk.
+     - `SESSION_SECRET` *(recommended)*: `render.yaml` generates one
+       automatically if you deploy via Blueprint; set it explicitly otherwise,
+       or every restart signs all users out.
    - Click **"Create Web Service"**.
 
 Render will automatically build the Docker container and provide a live public HTTPS URL:

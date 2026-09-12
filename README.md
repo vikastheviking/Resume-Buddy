@@ -78,7 +78,7 @@ mode — but it will not raise keyword coverage, and the result panel labels it 
 │    - Keyword & impact scorer │
 │    - Groq Llama-3.3-70B      │
 │    - PDF / DOCX exporter     │
-│    - SQLite user store       │
+│    - Supabase Postgres users │
 └──────────────────────────────┘
 ```
 
@@ -99,7 +99,7 @@ exits. The engine binds to loopback only; the Node process is the sole public en
 │   ├── optimizer.py           LLM-driven rewrite against a job description
 │   ├── exporter.py            ATS-clean PDF and DOCX rendering
 │   ├── llm_client.py          provider-agnostic LLM transport
-│   ├── auth.py                SQLite accounts, PBKDF2-HMAC-SHA256 hashing
+│   ├── auth.py                Supabase Postgres accounts, PBKDF2-HMAC-SHA256 hashing
 │   └── sample_data.py         built-in demo resume/JD pairs (synthetic)
 ├── server/                   Node.js web server
 │   ├── index.js               Express app, static hosting, API proxy, engine supervisor
@@ -122,8 +122,10 @@ exits. The engine binds to loopback only; the Node process is the sole public en
 └── Procfile                  Railway / Fly.io / Heroku entry point
 ```
 
-Runtime state (the SQLite user store) is written to `data/`, which is gitignored. Override
-the location with `RESUME_BUDDY_DATA_DIR`.
+User accounts are stored in Supabase Postgres (table `app_users`, see
+`supabase_app_users_setup.sql`), accessed via its REST API using the service_role key
+(`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY`). This survives redeploys, unlike a local
+file on Render's ephemeral disk.
 
 ---
 
@@ -218,7 +220,7 @@ repo root on the path so `engine.*` imports resolve without any `sys.path` manip
 | `PORT` | no | Node web server port (default `3000`) |
 | `PYTHON_PORT` | no | Python engine port (default `5001`) |
 | `PYTHON_BIN` | no | Interpreter used to spawn the engine (default `python`) |
-| `RESUME_BUDDY_DATA_DIR` | no | Where the SQLite user store lives (default `./data`) |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | yes | Supabase Postgres project used for the `app_users` table. See `supabase_app_users_setup.sql`. |
 | `CORS_ORIGINS` | no | Comma-separated origin allowlist. Same-origin only when unset. |
 | `ENGINE_TIMEOUT_MS` | no | Timeout for engine calls (default `20000`) |
 | `OPTIMIZE_TIMEOUT_MS` | no | Timeout for the optimize call, which waits on an LLM (default `120000`) |
@@ -240,10 +242,11 @@ Accounts created through the OTP flow are **passwordless**: they store no usable
 hash, and password login against them is refused. Email/password accounts use
 PBKDF2-HMAC-SHA256 with a per-user salt.
 
-**Known gap:** sign-in state is held client-side in `localStorage` and no endpoint requires
-it — `/api/optimize` and the export routes are reachable without authenticating. Rate
-limiting is per-IP rather than per-account. Adding server-issued session tokens and gating
-the expensive routes behind them is the natural next step if this is deployed publicly.
+Sign-in issues a server-signed bearer token (`server/sessions.js`) on successful login,
+signup, or OTP verification; `/api/optimize`, `/api/skill-gap-plan`, and the export routes
+require a valid one (`requireAuth` in `server/index.js`). Guests get a token too (tagged
+distinctly from verified-email ones) rather than bypassing auth entirely. Rate limiting is
+per-IP (`express-rate-limit`) in addition to the per-account OTP cooldown.
 
 ---
 
@@ -252,9 +255,9 @@ the expensive routes behind them is the natural next step if this is deployed pu
 `Dockerfile` (Node + Python in one image), `render.yaml` (Render.com blueprint) and
 `Procfile` (Railway, Fly.io, Heroku) are included. See [docs/deployment.md](docs/deployment.md).
 
-Note that the SQLite user store is written to the container filesystem. On platforms with
-ephemeral disks, mount a volume and point `RESUME_BUDDY_DATA_DIR` at it, or accounts are lost
-on every redeploy.
+User accounts live in Supabase Postgres, not the container filesystem, so they survive
+redeploys on platforms with ephemeral disks (Render's free tier included) without needing
+a mounted volume.
 
 ---
 

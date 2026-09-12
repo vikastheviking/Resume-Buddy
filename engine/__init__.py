@@ -8,7 +8,7 @@ Core resume-optimization pipeline behind the Starlette API (`engine.api`):
     optimizer  -> LLM-driven rewrite against a job description
     exporter   -> ATS-clean PDF / DOCX rendering
     llm_client -> provider-agnostic LLM transport
-    auth       -> SQLite-backed email/password accounts
+    auth       -> Supabase-backed email/password accounts
 """
 
 __version__ = "2.0.0"
