@@ -11,6 +11,15 @@ WORKDIR /build
 COPY package.json package-lock.json* ./
 RUN npm ci || npm install
 
+# Vite inlines these into the JS bundle at build time (import.meta.env.VITE_*) - the
+# browser talks to Supabase directly, so it needs the URL/anon key baked in here, not
+# just set as a runtime env var on the container. Render passes dashboard environment
+# variables as build args automatically for Docker services.
+ARG VITE_SUPABASE_URL
+ARG VITE_SUPABASE_ANON_KEY
+ENV VITE_SUPABASE_URL=$VITE_SUPABASE_URL
+ENV VITE_SUPABASE_ANON_KEY=$VITE_SUPABASE_ANON_KEY
+
 COPY vite.config.mjs ./
 COPY web/ ./web/
 RUN npm run build

@@ -1,11 +1,20 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { guestSession, sendOtp, validateEmail, verifyOtp } from '../api';
+import { checkAvailability, validateEmail } from '../api';
+import { supabase } from '../supabaseClient';
 
 const RESEND_SECONDS = 45;
 const GUEST_IDENTITY = 'guest@resume-buddy.local';
+const PHONE_PATTERN = /^[+\d][\d\s\-()]{6,19}$/;
+// Supabase's OTP length isn't guaranteed to be 6 digits (depends on project config),
+// so this only checks it looks like a numeric code and lets Supabase's own
+// verification be the source of truth on whether it's actually correct.
+const OTP_PATTERN = /^\d{4,12}$/;
 
 /**
- * Two-step email authentication: request a one-time code, then enter it.
+ * Two-step email authentication via Supabase Auth: request a one-time code, then enter
+ * it. Supabase sends and verifies the code itself; this dialog only decides which of
+ * Sign In / Create Account the user meant (via the availability check below) before
+ * asking Supabase to send one.
  *
  * The email field validates as you type (debounced) against the server's deliverability
  * check, so a typo is caught before a code is sent to an address that cannot receive it.
@@ -95,13 +104,38 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
       setBusy(true);
       setAlert(null);
       try {
-        const signupDetails = mode === 'signup' ? { fullName: fullName.trim(), phone: phone.trim() } : undefined;
-        const data = await sendOtp(target, mode, signupDetails);
-        setPendingEmail(data.email || target);
+        const isSignup = mode === 'signup';
+        const cleanPhone = phone.trim();
+        const cleanName = fullName.trim();
+
+        // Sign In vs Create Account is enforced here, before Supabase ever sends a
+        // code: Sign In requires the account to already exist, Create Account
+        // requires the email (and phone) to be free.
+        const availability = await checkAvailability(target, isSignup ? cleanPhone : undefined);
+        if (!isSignup && !availability.emailExists) {
+          throw new Error('No account found with this email. Please create an account instead.');
+        }
+        if (isSignup && availability.emailExists) {
+          throw new Error('An account with this email already exists. Please sign in instead.');
+        }
+        if (isSignup && availability.phoneExists) {
+          throw new Error('This phone number is already registered to another account.');
+        }
+
+        const { error } = await supabase.auth.signInWithOtp({
+          email: target,
+          options: {
+            shouldCreateUser: isSignup,
+            ...(isSignup ? { data: { full_name: cleanName, phone: cleanPhone } } : {}),
+          },
+        });
+        if (error) throw error;
+
+        setPendingEmail(target);
         setStep('otp');
         setCooldown(RESEND_SECONDS);
         setTimeout(() => otpRef.current?.focus(), 60);
-        onNotify(resend ? 'A new verification code is on its way.' : data.message);
+        onNotify(resend ? 'A new verification code is on its way.' : 'Verification code sent to your email!');
       } catch (error) {
         const suggestion = error.payload?.suggestion;
         setAlert({
@@ -116,8 +150,6 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
   );
 
   if (!open) return null;
-
-  const PHONE_PATTERN = /^[+\d][\d\s\-()]{6,19}$/;
 
   const submitEmail = (event) => {
     event.preventDefault();
@@ -141,18 +173,46 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
 
   const submitOtp = async (event) => {
     event.preventDefault();
-    if (otp.trim().length !== 6) {
-      setAlert({ tone: 'error', message: 'Enter the complete six-digit code.' });
+    const cleanOtp = otp.trim();
+    if (!OTP_PATTERN.test(cleanOtp)) {
+      setAlert({ tone: 'error', message: 'Enter the verification code from your email.' });
       return;
     }
     setBusy(true);
     setAlert(null);
     try {
-      const data = await verifyOtp(pendingEmail, otp.trim());
-      onAuthenticated(data.email, data.token);
-      onNotify(`Signed in as ${data.email}`);
+      const { data, error } = await supabase.auth.verifyOtp({
+        email: pendingEmail,
+        token: cleanOtp,
+        type: 'email',
+      });
+      if (error || !data.session) {
+        throw new Error(error?.message || 'Invalid or expired code.');
+      }
+      onAuthenticated(data.user.email, data.session.access_token);
+      onNotify(`Signed in as ${data.user.email}`);
     } catch (error) {
       setAlert({ tone: 'error', message: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const continueAsGuest = async () => {
+    setBusy(true);
+    setAlert(null);
+    try {
+      const { data, error } = await supabase.auth.signInAnonymously();
+      if (error) throw error;
+      onAuthenticated(data.user?.email || GUEST_IDENTITY, data.session.access_token);
+      onNotify('Continuing as a guest.');
+    } catch (error) {
+      setAlert({
+        tone: 'error',
+        message: /anonymous/i.test(error.message)
+          ? 'Guest access is not enabled for this project yet.'
+          : error.message,
+      });
     } finally {
       setBusy(false);
     }
@@ -274,18 +334,7 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
               type="button"
               className="button button--ghost button--block"
               disabled={busy}
-              onClick={async () => {
-                setBusy(true);
-                try {
-                  const data = await guestSession();
-                  onAuthenticated(data.email || GUEST_IDENTITY, data.token);
-                  onNotify('Continuing as a guest.');
-                } catch (error) {
-                  setAlert({ tone: 'error', message: error.message });
-                } finally {
-                  setBusy(false);
-                }
-              }}
+              onClick={continueAsGuest}
             >
               Continue as guest
             </button>
@@ -293,12 +342,15 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
         ) : (
           <>
             <p className="prose-note">
-              We sent a six-digit code to <strong>{pendingEmail}</strong>.
+              We sent a verification code to <strong>{pendingEmail}</strong>.
+            </p>
+            <p className="prose-note" style={{ fontSize: '0.85em' }}>
+              Don&rsquo;t see it? Check your spam/junk folder.
             </p>
 
             <form className="form" onSubmit={submitOtp}>
               <label className="sr-only" htmlFor="auth-otp">
-                Six-digit verification code
+                Verification code
               </label>
               <input
                 id="auth-otp"
@@ -306,8 +358,8 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
                 className="field field--code"
                 inputMode="numeric"
                 autoComplete="one-time-code"
-                maxLength={6}
-                placeholder="000000"
+                maxLength={12}
+                placeholder="Enter code"
                 value={otp}
                 onChange={(event) => setOtp(event.target.value.replace(/\D/g, ''))}
                 required

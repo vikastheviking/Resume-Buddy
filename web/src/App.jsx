@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { downloadExport, getSample, optimize, scoreResume, setToken } from './api';
+import { supabase } from './supabaseClient';
 import { renderResumeMarkdown } from './markdown.jsx';
 import AuditPanel from './components/AuditPanel';
 import AuthDialog from './components/AuthDialog';
@@ -7,16 +8,7 @@ import DocumentInput from './components/DocumentInput';
 import ScorePanel from './components/ScorePanel';
 import SkillGapPlan from './components/SkillGapPlan';
 
-const AUTH_STORAGE_KEY = 'resume_buddy_user';
 const THEME_STORAGE_KEY = 'resume_buddy_theme';
-
-function readStoredUser() {
-  try {
-    return localStorage.getItem(AUTH_STORAGE_KEY);
-  } catch {
-    return null; // private browsing, or site data blocked
-  }
-}
 
 function readStoredTheme() {
   try {
@@ -33,7 +25,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [exporting, setExporting] = useState(null);
   const [loadingSample, setLoadingSample] = useState(false);
-  const [user, setUser] = useState(readStoredUser);
+  const [user, setUser] = useState(null);
   const [authPrompt, setAuthPrompt] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
   const [toast, setToast] = useState(null);
@@ -69,29 +61,37 @@ export default function App() {
     }
   };
 
-  const signIn = useCallback(
-    (email, token) => {
-      setUser(email);
-      setToken(token || null);
-      try {
-        localStorage.setItem(AUTH_STORAGE_KEY, email);
-      } catch {
-        /* session-only sign-in is an acceptable fallback */
+  // Supabase persists its own session (with auto-refresh) under its own localStorage
+  // key, so this reads the real, current session on load instead of just assuming a
+  // previously-remembered email/token pair is still valid - and onAuthStateChange
+  // keeps user/token in sync afterwards (token refresh, sign-out in another tab, etc.).
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      if (data.session) {
+        setUser(data.session.user.email);
+        setToken(data.session.access_token);
       }
-      setAuthOpen(false);
-      setAuthPrompt(null);
-    },
-    [],
-  );
+    });
 
-  const signOut = () => {
+    const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session ? session.user.email : null);
+      setToken(session ? session.access_token : null);
+    });
+
+    return () => subscription.subscription.unsubscribe();
+  }, []);
+
+  const signIn = useCallback((email, token) => {
+    setUser(email);
+    setToken(token || null);
+    setAuthOpen(false);
+    setAuthPrompt(null);
+  }, []);
+
+  const signOut = async () => {
+    await supabase.auth.signOut();
     setUser(null);
     setToken(null);
-    try {
-      localStorage.removeItem(AUTH_STORAGE_KEY);
-    } catch {
-      /* nothing to clear */
-    }
     notify('Signed out.');
   };
 
@@ -113,13 +113,9 @@ export default function App() {
   const recoverFromAuthError = useCallback(
     (error) => {
       if (!/session has expired|sign in to use/i.test(error.message)) return false;
+      supabase.auth.signOut();
       setUser(null);
       setToken(null);
-      try {
-        localStorage.removeItem(AUTH_STORAGE_KEY);
-      } catch {
-        /* nothing to clear */
-      }
       setAuthPrompt('Your session expired. Please sign in again to continue.');
       setAuthOpen(true);
       return true;

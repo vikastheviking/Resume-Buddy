@@ -14,12 +14,10 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const https = require('https');
-const crypto = require('crypto');
 const multer = require('multer');
 const { spawn } = require('child_process');
+const { createClient } = require('@supabase/supabase-js');
 const { verifyRealEmail } = require('./email-validator');
-const { createAndSendOtp, verifyOtp } = require('./otp-service');
-const { createSessionToken, requireAuth } = require('./sessions');
 require('dotenv').config();
 
 // Repo root: this file lives in server/, everything else resolves from one level up.
@@ -31,6 +29,33 @@ const PORT = process.env.PORT || 3000;
 const PYTHON_PORT = process.env.PYTHON_PORT || 5001;
 const PYTHON_BASE_URL = `http://127.0.0.1:${PYTHON_PORT}`;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production';
+
+// Authentication and account storage both live in Supabase now, not this process.
+// `supabase` (anon key) only ever verifies a bearer token a client already holds;
+// `supabaseAdmin` (service_role, bypasses RLS) is for the availability check below,
+// which has to see across all users rather than just the caller's own row.
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_ANON_KEY || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error('[Supabase] SUPABASE_URL, SUPABASE_ANON_KEY and SUPABASE_SERVICE_ROLE_KEY must all be set.');
+}
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabaseAdmin = process.env.SUPABASE_SERVICE_ROLE_KEY
+  ? createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY)
+  : null;
+
+/** Express middleware: requires a valid Supabase access token in Authorization: Bearer <token>. */
+async function requireAuth(req, res, next) {
+  const header = req.headers.authorization || '';
+  const [scheme, token] = header.split(' ');
+  if (scheme !== 'Bearer' || !token) {
+    return res.status(401).json({ error: 'Sign in to use this feature.' });
+  }
+  const { data, error } = await supabase.auth.getUser(token);
+  if (error || !data?.user) {
+    return res.status(401).json({ error: 'Your session has expired. Please sign in again.' });
+  }
+  req.user = data.user;
+  next();
+}
 
 // How long to wait on the engine. Optimization runs an LLM call, so it gets its own
 // budget; everything else should answer promptly.
@@ -63,7 +88,9 @@ app.use(helmet({
       styleSrc: ["'self'", 'https://fonts.googleapis.com', "'unsafe-inline'"],
       fontSrc: ["'self'", 'https://fonts.gstatic.com'],
       imgSrc: ["'self'", 'data:'],
-      connectSrc: ["'self'"],
+      // The browser calls Supabase directly (signInWithOtp/verifyOtp/session refresh) -
+      // without this, CSP silently blocks every one of those requests.
+      connectSrc: ["'self'", process.env.SUPABASE_URL].filter(Boolean),
       objectSrc: ["'none'"],
       frameAncestors: ["'none'"],
       baseUri: ["'self'"],
@@ -333,178 +360,46 @@ app.post('/api/auth/validate-email', authLimiter, async (req, res) => {
   }
 });
 
-app.post('/api/auth/send-otp', authLimiter, async (req, res) => {
+// Reports whether an email/phone already has an account, using the profiles table
+// (kept in sync with auth.users by a database trigger - see supabase_profiles_setup.sql).
+// This is what makes Sign In and Create Account behave differently: Sign In needs the
+// email to exist, Create Account needs the email and phone to both be free. Needs the
+// service_role key because RLS on `profiles` only lets a user read their own row.
+app.post('/api/auth/check-availability', authLimiter, async (req, res) => {
   try {
-    const { email, mode = 'signup', phone, fullName } = req.body || {};
-    if (!email) {
-      return res.status(400).json({ success: false, error: 'Email address is required.' });
+    const { email, phone } = req.body || {};
+    if (!email && !phone) {
+      return res.status(400).json({ error: 'email or phone is required.' });
     }
-    // The frontend's two tabs send mode 'login' or 'signup' - not 'signin', which this
-    // route used to compare against, so every request fell through to 'signup' and Sign
-    // In / Create Account behaved identically regardless of which tab was used.
-    const isSignup = mode !== 'login';
-
-    const verification = await verifyRealEmail(email);
-    if (!verification.isValid) {
-      return res.status(400).json({
-        success: false,
-        error: verification.error,
-        suggestion: verification.suggestion,
-      });
-    }
-    const cleanEmail = verification.cleanEmail || email.trim().toLowerCase();
-
-    const cleanPhone = (phone || '').trim();
-    const cleanName = (fullName || '').trim();
-    if (isSignup) {
-      if (!cleanName) {
-        return res.status(400).json({ success: false, error: 'Please enter your full name.' });
-      }
-      if (!cleanPhone || !/^[+\d][\d\s\-()]{6,19}$/.test(cleanPhone)) {
-        return res.status(400).json({ success: false, error: 'Please enter a valid phone number.' });
-      }
+    if (!supabaseAdmin) {
+      return res.status(500).json({ error: 'Server is not configured for account existence checks.' });
     }
 
-    // Existence check: this is what actually makes Sign In and Create Account behave
-    // differently. Sign In requires the account to already exist; Create Account
-    // requires the email (and phone) to be free. Neither sends an OTP if the check fails.
-    let availability;
-    try {
-      const availRes = await engineFetch('/api/auth/check-availability', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(isSignup ? { email: cleanEmail, phone: cleanPhone } : { email: cleanEmail }),
-      });
-      availability = await availRes.json();
-      if (!availRes.ok) throw new Error(availability.error || 'availability check failed');
-    } catch (err) {
-      return fail(res, 502, 'Could not verify account status right now. Please try again.', err, 'success');
+    const result = {};
+
+    if (email) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('email', email.trim().toLowerCase())
+        .maybeSingle();
+      if (error) throw error;
+      result.emailExists = !!data;
     }
 
-    if (!isSignup && !availability.emailExists) {
-      return res.status(400).json({
-        success: false,
-        error: 'No account found with this email. Please create an account instead.',
-      });
-    }
-    if (isSignup && availability.emailExists) {
-      return res.status(400).json({
-        success: false,
-        error: 'An account with this email already exists. Please sign in instead.',
-      });
-    }
-    if (isSignup && availability.phoneExists) {
-      return res.status(400).json({
-        success: false,
-        error: 'This phone number is already registered to another account.',
-      });
+    if (phone) {
+      const { data, error } = await supabaseAdmin
+        .from('profiles')
+        .select('id')
+        .eq('phone', phone.trim())
+        .maybeSingle();
+      if (error) throw error;
+      result.phoneExists = !!data;
     }
 
-    const signupDetails = isSignup ? { phone: cleanPhone, fullName: cleanName } : null;
-    const otpResult = await createAndSendOtp(cleanEmail, isSignup ? 'signup' : 'signin', signupDetails);
-    if (!otpResult.success) {
-      return res.status(429).json(otpResult);
-    }
-
-    res.json({
-      success: true,
-      message: otpResult.message,
-      email: cleanEmail,
-      mode,
-    });
+    res.json(result);
   } catch (err) {
-    return fail(res, 500, 'Could not send a verification code.', err, 'success');
-  }
-});
-
-app.post('/api/auth/verify-otp', authLimiter, async (req, res) => {
-  try {
-    const { email, otp } = req.body || {};
-    if (!email || !otp) {
-      return res.status(400).json({ success: false, error: 'Both email and 6-digit verification code are required.' });
-    }
-
-    const verification = verifyOtp(email, otp);
-    if (!verification.isValid) {
-      return res.status(400).json({ success: false, error: verification.error });
-    }
-
-    // Register the address as a passwordless account. It deliberately has no usable
-    // password: these users authenticate by OTP, and minting one with a shared literal
-    // password would let anyone holding that string sign in as any of them. Name/phone
-    // (collected at signup, carried through the OTP record) are attached on first
-    // creation only - a Sign In verification has no signupDetails and persists none.
-    try {
-      await engineFetch('/api/auth/ensure-user', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: verification.email,
-          phone: verification.signupDetails?.phone,
-          full_name: verification.signupDetails?.fullName,
-        }),
-      });
-    } catch (err) {
-      console.error('[auth] could not persist OTP-verified user:', err.message);
-    }
-
-    res.json({
-      success: true,
-      message: 'Email successfully verified.',
-      email: verification.email,
-      mode: verification.mode,
-      token: createSessionToken(verification.email),
-    });
-  } catch (err) {
-    return fail(res, 500, 'Could not verify that code.', err, 'success');
-  }
-});
-
-// Anonymous access still needs a real session token — otherwise every protected route
-// would have to choose between locking guests out entirely or accepting no proof of
-// auth at all, which is the gap this whole session layer exists to close. Guest tokens
-// are tagged distinctly from verified-email tokens so logs and future limits can tell
-// them apart, and issuing one is itself rate-limited by authLimiter.
-app.post('/api/auth/guest', authLimiter, (req, res) => {
-  const guestEmail = `guest+${crypto.randomBytes(8).toString('hex')}@resume-buddy.local`;
-  res.json({ success: true, email: guestEmail, token: createSessionToken(guestEmail) });
-});
-
-app.post('/api/auth/signup', authLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const verification = await verifyRealEmail(email);
-    if (!verification.isValid) {
-      return res.status(400).json({
-        success: false,
-        error: verification.error,
-        suggestion: verification.suggestion,
-      });
-    }
-    return await proxyJson(res, '/api/auth/signup', {
-      email: verification.cleanEmail || email,
-      password,
-    }, { label: 'signup' });
-  } catch (err) {
-    return fail(res, 502, 'Could not create that account.', err, 'success');
-  }
-});
-
-app.post('/api/auth/login', authLimiter, async (req, res) => {
-  try {
-    const { email, password } = req.body || {};
-    const engineRes = await engineFetch('/api/auth/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ email, password }),
-    });
-    const data = await engineRes.json();
-    if (engineRes.ok && data.success && data.email) {
-      data.token = createSessionToken(data.email);
-    }
-    return res.status(engineRes.status).json(data);
-  } catch (err) {
-    return fail(res, 502, 'Could not sign you in.', err, 'success');
+    return fail(res, 502, 'Could not check account availability.', err);
   }
 });
 

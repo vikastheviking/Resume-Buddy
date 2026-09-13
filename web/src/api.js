@@ -91,16 +91,9 @@ export const getSkillGapPlan = (jdText, gapKeywords) =>
 export const validateEmail = (email) =>
   request('/api/auth/validate-email', { method: 'POST', body: { email } });
 
-export const sendOtp = (email, mode, signupDetails) =>
-  request('/api/auth/send-otp', {
-    method: 'POST',
-    body: { email, mode, ...(signupDetails || {}) },
-  });
-
-export const verifyOtp = (email, otp) =>
-  request('/api/auth/verify-otp', { method: 'POST', body: { email, otp } });
-
-export const guestSession = () => request('/api/auth/guest', { method: 'POST' });
+/** Sign In needs the email to already exist; Create Account needs email (and phone) free. */
+export const checkAvailability = (email, phone) =>
+  request('/api/auth/check-availability', { method: 'POST', body: { email, phone } });
 
 /**
  * Ask the server to render the resume and hand the file to the browser.

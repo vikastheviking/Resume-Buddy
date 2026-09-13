@@ -62,14 +62,20 @@ Render provides free hosting with **automatic HTTPS/SSL certificates** and free 
    - In **Environment Variables**, add:
      - `GROQ_API_KEY` and/or `GEMINI_API_KEY`: your LLM provider key(s)
      - `NODE_ENV`: `production`
-     - `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`: your Supabase project's
-       API URL and service_role key (Project Settings -> API). Run
-       `supabase_app_users_setup.sql` once in the Supabase SQL Editor first.
-       Accounts are stored there, not on Render's filesystem, so they survive
-       redeploys even without a persistent disk.
-     - `SESSION_SECRET` *(recommended)*: `render.yaml` generates one
-       automatically if you deploy via Blueprint; set it explicitly otherwise,
-       or every restart signs all users out.
+     - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: your
+       Supabase project's API URL, anon key, and service_role key (Project
+       Settings -> API). Run `supabase_profiles_setup.sql` once in the
+       Supabase SQL Editor first. Accounts, sessions, and OTP email delivery
+       all live in Supabase - not on Render's filesystem, and not subject to
+       Render's outbound network restrictions - so they survive redeploys and
+       work regardless of what Render allows outbound.
+     - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY`: same values as
+       `SUPABASE_URL`/`SUPABASE_ANON_KEY` above. The Dockerfile passes these
+       through as Docker build args so Vite can inline them into the frontend
+       bundle - the browser talks to Supabase directly, so it needs its own
+       copy of these at build time, not just the server having them at
+       runtime. Render passes dashboard environment variables to `docker
+       build` as build args automatically for Docker-environment services.
    - Click **"Create Web Service"**.
 
 Render will automatically build the Docker container and provide a live public HTTPS URL:
@@ -84,10 +90,15 @@ The repository includes a standard [`Procfile`](../Procfile):
 web: node server/index.js
 ```
 You can deploy directly to Railway or Fly.io by connecting your Git repository and setting
-`GROQ_API_KEY`.
+`GROQ_API_KEY`, `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, and the
+`VITE_SUPABASE_URL`/`VITE_SUPABASE_ANON_KEY` pair (same values as the plain
+`SUPABASE_URL`/`SUPABASE_ANON_KEY`).
 
 These platforms run `npm run build` automatically after installing dependencies, which
 compiles the frontend. If yours does not, add it to the build command explicitly —
-`node server/index.js` alone will start the API but serve no UI. The Docker path handles
-this already: the image builds the frontend in a first stage and copies `web/dist` into
-the runtime stage, so the build toolchain never ships to production.
+`node server/index.js` alone will start the API but serve no UI. Since these are native
+buildpack builds rather than an isolated Docker build context, setting the `VITE_*`
+variables as regular environment variables is enough for Vite to pick them up during that
+build step - no separate build-arg wiring needed the way the Dockerfile requires for
+Render. The Docker path handles the frontend build in a first stage and copies `web/dist`
+into the runtime stage, so the build toolchain never ships to production.

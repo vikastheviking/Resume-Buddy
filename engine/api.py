@@ -21,7 +21,6 @@ from engine.optimizer import optimize_resume
 from engine.exporter import generate_ats_pdf, generate_ats_docx
 from engine.sample_data import SAMPLE_JOBS
 from engine.llm_client import BackendLLMClient
-from engine.auth import login_user, signup_user, ensure_user, user_exists, phone_exists
 from engine.skill_gap import generate_skill_gap_plan
 
 logging.basicConfig(level=logging.INFO)
@@ -222,88 +221,8 @@ async def export_docx(request: Request) -> Response:
         return JSONResponse({"error": _SAFE_ERROR}, status_code=500)
 
 
-async def auth_signup(request: Request) -> JSONResponse:
-    """Registers a new user account with email and password."""
-    try:
-        body = await request.json()
-        email = body.get("email", "").strip()
-        password = body.get("password", "")
-        success, message = signup_user(email, password)
-        if success:
-            return JSONResponse({"success": True, "message": message, "email": email.lower()})
-        else:
-            return JSONResponse({"success": False, "error": message}, status_code=400)
-    except Exception as e:
-        logger.error(f"Auth signup error: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": _SAFE_ERROR}, status_code=500)
-
-
-async def auth_login(request: Request) -> JSONResponse:
-    """Authenticates user credentials."""
-    try:
-        body = await request.json()
-        email = body.get("email", "").strip()
-        password = body.get("password", "")
-        success, message = login_user(email, password)
-        if success:
-            return JSONResponse({"success": True, "message": message, "email": email.lower()})
-        else:
-            return JSONResponse({"success": False, "error": message}, status_code=400)
-    except Exception as e:
-        logger.error(f"Auth login error: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": _SAFE_ERROR}, status_code=500)
-
-
-async def auth_ensure_user(request: Request) -> JSONResponse:
-    """
-    Register an OTP-verified email as a passwordless account.
-
-    Called by the Node layer once a one-time code checks out. Loopback-only, like the
-    rest of this service.
-    """
-    try:
-        body = await request.json()
-        email = body.get("email", "").strip()
-        phone = body.get("phone") or None
-        full_name = body.get("full_name") or None
-        success, message = ensure_user(email, phone=phone, full_name=full_name)
-        status = 200 if success else 400
-        return JSONResponse({"success": success, "message": message, "email": email.lower()}, status_code=status)
-    except Exception as e:
-        logger.error(f"Auth ensure-user error: {e}", exc_info=True)
-        return JSONResponse({"success": False, "error": "Could not register that account."}, status_code=500)
-
-
-async def auth_check_availability(request: Request) -> JSONResponse:
-    """
-    Reports whether an email and/or phone number already has an account.
-
-    Lets the Node layer tell Sign In from Create Account apart before ever sending an
-    OTP: Sign In needs the email to already exist, Create Account needs both the email
-    and (if given) the phone to be free.
-    """
-    try:
-        body = await request.json()
-        email = (body.get("email") or "").strip()
-        phone = (body.get("phone") or "").strip()
-        if not email and not phone:
-            return JSONResponse({"error": "email or phone is required."}, status_code=400)
-
-        result = {}
-        if email:
-            result["emailExists"] = user_exists(email)
-        if phone:
-            result["phoneExists"] = phone_exists(phone)
-        return JSONResponse(result)
-    except Exception as e:
-        logger.error(f"Auth check-availability error: {e}", exc_info=True)
-        return JSONResponse({"error": "Could not check account availability."}, status_code=500)
-
-
 routes = [
     Route("/api/health", health_check, methods=["GET"]),
-    Route("/api/auth/ensure-user", auth_ensure_user, methods=["POST"]),
-    Route("/api/auth/check-availability", auth_check_availability, methods=["POST"]),
     Route("/api/sample", get_sample_data, methods=["GET"]),
     Route("/api/extract", extract_file, methods=["POST"]),
     Route("/api/score", score_resume, methods=["POST"]),
@@ -311,8 +230,6 @@ routes = [
     Route("/api/skill-gap-plan", skill_gap_plan_endpoint, methods=["POST"]),
     Route("/api/export/pdf", export_pdf, methods=["POST"]),
     Route("/api/export/docx", export_docx, methods=["POST"]),
-    Route("/api/auth/signup", auth_signup, methods=["POST"]),
-    Route("/api/auth/login", auth_login, methods=["POST"]),
 ]
 
 # This service binds to loopback and is reached only by the Node server process, so no
