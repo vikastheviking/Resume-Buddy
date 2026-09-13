@@ -91,8 +91,11 @@ export const getSkillGapPlan = (jdText, gapKeywords) =>
 export const validateEmail = (email) =>
   request('/api/auth/validate-email', { method: 'POST', body: { email } });
 
-export const sendOtp = (email, mode) =>
-  request('/api/auth/send-otp', { method: 'POST', body: { email, mode } });
+export const sendOtp = (email, mode, signupDetails) =>
+  request('/api/auth/send-otp', {
+    method: 'POST',
+    body: { email, mode, ...(signupDetails || {}) },
+  });
 
 export const verifyOtp = (email, otp) =>
   request('/api/auth/verify-otp', { method: 'POST', body: { email, otp } });

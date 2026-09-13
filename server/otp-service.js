@@ -233,7 +233,7 @@ async function sendOtpEmail(email, otp, mode = 'signup') {
 /**
  * Creates and dispatches a 6-digit OTP for the given email.
  */
-async function createAndSendOtp(email, mode = 'signup') {
+async function createAndSendOtp(email, mode = 'signup', signupDetails = null) {
   const cleanEmail = email.trim().toLowerCase();
   const existing = otpStore.get(cleanEmail);
 
@@ -269,7 +269,11 @@ async function createAndSendOtp(email, mode = 'signup') {
     expiresAt,
     attempts: 0,
     lastSentAt: now,
-    mode
+    mode,
+    // Carried through from the signup form to the moment the code is verified, since
+    // ensure-user (which persists them) only runs after verification succeeds - the
+    // client is not asked to resend name/phone at that point.
+    signupDetails: signupDetails || null,
   });
 
   const sendResult = await sendOtpEmail(cleanEmail, otp, mode);
@@ -343,12 +347,14 @@ function verifyOtp(email, inputOtp) {
 
   // Valid OTP!
   const mode = record.mode;
+  const signupDetails = record.signupDetails;
   otpStore.delete(cleanEmail); // One-time use: consume immediately
 
   return {
     isValid: true,
     email: cleanEmail,
-    mode
+    mode,
+    signupDetails
   };
 }
 

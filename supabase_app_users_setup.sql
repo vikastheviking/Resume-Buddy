@@ -11,6 +11,10 @@ create table if not exists app_users (
   created_at timestamptz not null default now()
 );
 
+-- Safe to run again if you already created the table above without these columns.
+alter table app_users add column if not exists phone text unique;
+alter table app_users add column if not exists full_name text;
+
 -- RLS stays enabled with zero policies: this blocks the anon/authenticated keys
 -- entirely. Only the service_role key (used server-side by the engine) can read
 -- or write this table, since service_role bypasses RLS by design.

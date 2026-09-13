@@ -14,6 +14,8 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
   const [mode, setMode] = useState('login');
   const [step, setStep] = useState('email');
   const [email, setEmail] = useState('');
+  const [fullName, setFullName] = useState('');
+  const [phone, setPhone] = useState('');
   const [otp, setOtp] = useState('');
   const [pendingEmail, setPendingEmail] = useState('');
   const [hint, setHint] = useState(null); // { tone, message, fix? }
@@ -93,7 +95,8 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
       setBusy(true);
       setAlert(null);
       try {
-        const data = await sendOtp(target, mode);
+        const signupDetails = mode === 'signup' ? { fullName: fullName.trim(), phone: phone.trim() } : undefined;
+        const data = await sendOtp(target, mode, signupDetails);
         setPendingEmail(data.email || target);
         setStep('otp');
         setCooldown(RESEND_SECONDS);
@@ -109,10 +112,12 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
         setBusy(false);
       }
     },
-    [mode, onNotify],
+    [mode, fullName, phone, onNotify],
   );
 
   if (!open) return null;
+
+  const PHONE_PATTERN = /^[+\d][\d\s\-()]{6,19}$/;
 
   const submitEmail = (event) => {
     event.preventDefault();
@@ -120,6 +125,16 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
     if (!candidate) {
       setAlert({ tone: 'error', message: 'Enter your email address.' });
       return;
+    }
+    if (mode === 'signup') {
+      if (!fullName.trim()) {
+        setAlert({ tone: 'error', message: 'Enter your full name.' });
+        return;
+      }
+      if (!PHONE_PATTERN.test(phone.trim())) {
+        setAlert({ tone: 'error', message: 'Enter a valid phone number.' });
+        return;
+      }
     }
     requestCode(candidate);
   };
@@ -189,6 +204,38 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
             </div>
 
             <form className="form" onSubmit={submitEmail}>
+              {mode === 'signup' && (
+                <>
+                  <label className="label" htmlFor="auth-name">
+                    Full name
+                  </label>
+                  <input
+                    id="auth-name"
+                    className="field"
+                    type="text"
+                    autoComplete="name"
+                    placeholder="Jane Doe"
+                    value={fullName}
+                    onChange={(event) => setFullName(event.target.value)}
+                    required
+                  />
+
+                  <label className="label" htmlFor="auth-phone">
+                    Phone number
+                  </label>
+                  <input
+                    id="auth-phone"
+                    className="field"
+                    type="tel"
+                    autoComplete="tel"
+                    placeholder="+1 555 123 4567"
+                    value={phone}
+                    onChange={(event) => setPhone(event.target.value)}
+                    required
+                  />
+                </>
+              )}
+
               <label className="label" htmlFor="auth-email">
                 Email address
               </label>

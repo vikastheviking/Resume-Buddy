@@ -21,7 +21,7 @@ from engine.optimizer import optimize_resume
 from engine.exporter import generate_ats_pdf, generate_ats_docx
 from engine.sample_data import SAMPLE_JOBS
 from engine.llm_client import BackendLLMClient
-from engine.auth import login_user, signup_user, ensure_user
+from engine.auth import login_user, signup_user, ensure_user, user_exists, phone_exists
 from engine.skill_gap import generate_skill_gap_plan
 
 logging.basicConfig(level=logging.INFO)
@@ -264,7 +264,9 @@ async def auth_ensure_user(request: Request) -> JSONResponse:
     try:
         body = await request.json()
         email = body.get("email", "").strip()
-        success, message = ensure_user(email)
+        phone = body.get("phone") or None
+        full_name = body.get("full_name") or None
+        success, message = ensure_user(email, phone=phone, full_name=full_name)
         status = 200 if success else 400
         return JSONResponse({"success": success, "message": message, "email": email.lower()}, status_code=status)
     except Exception as e:
@@ -272,9 +274,36 @@ async def auth_ensure_user(request: Request) -> JSONResponse:
         return JSONResponse({"success": False, "error": "Could not register that account."}, status_code=500)
 
 
+async def auth_check_availability(request: Request) -> JSONResponse:
+    """
+    Reports whether an email and/or phone number already has an account.
+
+    Lets the Node layer tell Sign In from Create Account apart before ever sending an
+    OTP: Sign In needs the email to already exist, Create Account needs both the email
+    and (if given) the phone to be free.
+    """
+    try:
+        body = await request.json()
+        email = (body.get("email") or "").strip()
+        phone = (body.get("phone") or "").strip()
+        if not email and not phone:
+            return JSONResponse({"error": "email or phone is required."}, status_code=400)
+
+        result = {}
+        if email:
+            result["emailExists"] = user_exists(email)
+        if phone:
+            result["phoneExists"] = phone_exists(phone)
+        return JSONResponse(result)
+    except Exception as e:
+        logger.error(f"Auth check-availability error: {e}", exc_info=True)
+        return JSONResponse({"error": "Could not check account availability."}, status_code=500)
+
+
 routes = [
     Route("/api/health", health_check, methods=["GET"]),
     Route("/api/auth/ensure-user", auth_ensure_user, methods=["POST"]),
+    Route("/api/auth/check-availability", auth_check_availability, methods=["POST"]),
     Route("/api/sample", get_sample_data, methods=["GET"]),
     Route("/api/extract", extract_file, methods=["POST"]),
     Route("/api/score", score_resume, methods=["POST"]),

@@ -335,10 +335,14 @@ app.post('/api/auth/validate-email', authLimiter, async (req, res) => {
 
 app.post('/api/auth/send-otp', authLimiter, async (req, res) => {
   try {
-    const { email, mode = 'signup' } = req.body || {};
+    const { email, mode = 'signup', phone, fullName } = req.body || {};
     if (!email) {
       return res.status(400).json({ success: false, error: 'Email address is required.' });
     }
+    // The frontend's two tabs send mode 'login' or 'signup' - not 'signin', which this
+    // route used to compare against, so every request fell through to 'signup' and Sign
+    // In / Create Account behaved identically regardless of which tab was used.
+    const isSignup = mode !== 'login';
 
     const verification = await verifyRealEmail(email);
     if (!verification.isValid) {
@@ -348,9 +352,56 @@ app.post('/api/auth/send-otp', authLimiter, async (req, res) => {
         suggestion: verification.suggestion,
       });
     }
-
     const cleanEmail = verification.cleanEmail || email.trim().toLowerCase();
-    const otpResult = await createAndSendOtp(cleanEmail, mode === 'signin' ? 'signin' : 'signup');
+
+    const cleanPhone = (phone || '').trim();
+    const cleanName = (fullName || '').trim();
+    if (isSignup) {
+      if (!cleanName) {
+        return res.status(400).json({ success: false, error: 'Please enter your full name.' });
+      }
+      if (!cleanPhone || !/^[+\d][\d\s\-()]{6,19}$/.test(cleanPhone)) {
+        return res.status(400).json({ success: false, error: 'Please enter a valid phone number.' });
+      }
+    }
+
+    // Existence check: this is what actually makes Sign In and Create Account behave
+    // differently. Sign In requires the account to already exist; Create Account
+    // requires the email (and phone) to be free. Neither sends an OTP if the check fails.
+    let availability;
+    try {
+      const availRes = await engineFetch('/api/auth/check-availability', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(isSignup ? { email: cleanEmail, phone: cleanPhone } : { email: cleanEmail }),
+      });
+      availability = await availRes.json();
+      if (!availRes.ok) throw new Error(availability.error || 'availability check failed');
+    } catch (err) {
+      return fail(res, 502, 'Could not verify account status right now. Please try again.', err, 'success');
+    }
+
+    if (!isSignup && !availability.emailExists) {
+      return res.status(400).json({
+        success: false,
+        error: 'No account found with this email. Please create an account instead.',
+      });
+    }
+    if (isSignup && availability.emailExists) {
+      return res.status(400).json({
+        success: false,
+        error: 'An account with this email already exists. Please sign in instead.',
+      });
+    }
+    if (isSignup && availability.phoneExists) {
+      return res.status(400).json({
+        success: false,
+        error: 'This phone number is already registered to another account.',
+      });
+    }
+
+    const signupDetails = isSignup ? { phone: cleanPhone, fullName: cleanName } : null;
+    const otpResult = await createAndSendOtp(cleanEmail, isSignup ? 'signup' : 'signin', signupDetails);
     if (!otpResult.success) {
       return res.status(429).json(otpResult);
     }
@@ -380,12 +431,18 @@ app.post('/api/auth/verify-otp', authLimiter, async (req, res) => {
 
     // Register the address as a passwordless account. It deliberately has no usable
     // password: these users authenticate by OTP, and minting one with a shared literal
-    // password would let anyone holding that string sign in as any of them.
+    // password would let anyone holding that string sign in as any of them. Name/phone
+    // (collected at signup, carried through the OTP record) are attached on first
+    // creation only - a Sign In verification has no signupDetails and persists none.
     try {
       await engineFetch('/api/auth/ensure-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verification.email }),
+        body: JSON.stringify({
+          email: verification.email,
+          phone: verification.signupDetails?.phone,
+          full_name: verification.signupDetails?.fullName,
+        }),
       });
     } catch (err) {
       console.error('[auth] could not persist OTP-verified user:', err.message);

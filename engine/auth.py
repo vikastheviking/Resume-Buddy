@@ -101,6 +101,29 @@ def _find_user(email: str) -> Optional[dict]:
     return rows[0] if rows else None
 
 
+def user_exists(email: str) -> bool:
+    """True if an account with this email already exists (password or passwordless)."""
+    email_clean = email.strip().lower()
+    if not email_clean:
+        return False
+    return _find_user(email_clean) is not None
+
+
+def phone_exists(phone: str) -> bool:
+    """True if this phone number is already attached to an account."""
+    phone_clean = phone.strip()
+    if not phone_clean:
+        return False
+    resp = requests.get(
+        _REST_URL,
+        headers=_headers(),
+        params={"phone": f"eq.{phone_clean}", "select": "id", "limit": "1"},
+        timeout=_REQUEST_TIMEOUT,
+    )
+    resp.raise_for_status()
+    return len(resp.json()) > 0
+
+
 def signup_user(email: str, password: str) -> Tuple[bool, str]:
     """
     Registers a new user.
@@ -141,13 +164,16 @@ def signup_user(email: str, password: str) -> Tuple[bool, str]:
 PASSWORDLESS = "!"
 
 
-def ensure_user(email: str) -> Tuple[bool, str]:
+def ensure_user(email: str, phone: Optional[str] = None, full_name: Optional[str] = None) -> Tuple[bool, str]:
     """
     Register an email as a passwordless account, or confirm it already exists.
 
     Used after OTP verification. These accounts carry no usable password hash: identity
     is proven by controlling the mailbox, so there is nothing for a password check to
-    compare against and nothing an attacker can guess.
+    compare against and nothing an attacker can guess. phone/full_name are only written
+    on first creation - existence checks against them happen before the OTP is even sent
+    (see user_exists/phone_exists), so a duplicate here means the account already exists
+    and its original details are left alone.
     """
     config_error = _require_configured()
     if config_error:
@@ -158,16 +184,22 @@ def ensure_user(email: str) -> Tuple[bool, str]:
     if not is_valid_email(email_clean):
         return False, "Please provide a valid email address."
 
+    row = {
+        "email": email_clean,
+        "password_hash": PASSWORDLESS,
+        "salt": "",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    if phone:
+        row["phone"] = phone.strip()
+    if full_name:
+        row["full_name"] = full_name.strip()
+
     try:
         resp = requests.post(
             _REST_URL,
             headers=_headers(prefer="return=minimal"),
-            json={
-                "email": email_clean,
-                "password_hash": PASSWORDLESS,
-                "salt": "",
-                "created_at": datetime.now(timezone.utc).isoformat(),
-            },
+            json=row,
             timeout=_REQUEST_TIMEOUT,
         )
         if resp.status_code == 409 or (resp.status_code == 400 and "duplicate key" in resp.text.lower()):
