@@ -5,6 +5,12 @@ reportlab>=4.2.0        # ATS-clean PDF export
 openai>=1.30.0          # OpenAI-compatible LLM transport (Groq, DeepSeek, NVIDIA NIM)
 python-dotenv>=1.0.0    # loads .env when the engine runs standalone
 
+# OCR fallback for scanned/photographed PDFs (no real text layer for pypdf to read).
+# Requires the tesseract-ocr system package too - see Dockerfile.
+pymupdf>=1.24.0          # renders PDF pages to images, no poppler system dependency needed
+pytesseract>=0.3.10      # Python wrapper around the tesseract binary
+pillow>=10.0.0           # image handling between pymupdf and pytesseract
+
 # REST API service (engine.api) — launched by the Node server
 starlette>=0.37.0
 uvicorn>=0.30.0

@@ -1,11 +1,44 @@
 """Text normalisation, contact-detail detection and section parsing."""
 
+import os
+import shutil
+
+import pytest
+
 from engine.extractor import (
     clean_resume_text,
     extract_candidate_metadata,
     extract_text_from_bytes,
+    extract_text_from_pdf,
     parse_resume_sections,
 )
+
+_TESSERACT_AVAILABLE = shutil.which("tesseract") is not None or bool(os.environ.get("TESSERACT_CMD"))
+
+
+def _make_pdf_page_image(lines):
+    """A PDF page rendered purely as a raster image - no text objects at all, the same
+    shape as a scanned or photographed resume."""
+    import io
+
+    from PIL import Image, ImageDraw
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib.utils import ImageReader
+    from reportlab.pdfgen import canvas
+
+    img = Image.new("RGB", (850, 1100), "white")
+    draw = ImageDraw.Draw(img)
+    for i, line in enumerate(lines):
+        draw.text((50, 50 + i * 30), line, fill="black")
+    img_buffer = io.BytesIO()
+    img.save(img_buffer, format="PNG")
+    img_buffer.seek(0)
+
+    pdf_buffer = io.BytesIO()
+    c = canvas.Canvas(pdf_buffer, pagesize=letter)
+    c.drawImage(ImageReader(img_buffer), 0, 0, width=letter[0], height=letter[1])
+    c.save()
+    return pdf_buffer.getvalue()
 
 
 class TestCleanResumeText:
@@ -92,3 +125,37 @@ class TestExtractFromBytes:
     def test_falls_back_on_undecodable_bytes(self):
         """A latin-1 CV must not raise; it degrades to a lossy decode."""
         assert extract_text_from_bytes(b"caf\xe9 resume", "resume.txt")
+
+
+@pytest.mark.skipif(not _TESSERACT_AVAILABLE, reason="tesseract binary not found on PATH or TESSERACT_CMD")
+class TestOcrFallback:
+    """
+    A scanned or photographed PDF has no embedded text objects - only a picture of
+    text - so pypdf's extraction (which reads text objects, not pixels) finds nothing.
+    This used to surface as a misleading "Extracted 0 words" success message; OCR is
+    the actual fix, this just confirms it still works.
+    """
+
+    def test_recovers_text_from_an_image_only_pdf(self):
+        pdf_bytes = _make_pdf_page_image(["Jane Doe", "jane.doe@example.com"])
+        extracted = extract_text_from_pdf(pdf_bytes)
+        assert "jane" in extracted.lower()
+
+    def test_does_not_run_on_a_normal_text_pdf(self):
+        """A real text layer must be used as-is - OCR is a fallback, not a first resort."""
+        import io
+
+        from reportlab.lib.pagesizes import letter
+        from reportlab.pdfgen import canvas
+
+        buf = io.BytesIO()
+        c = canvas.Canvas(buf, pagesize=letter)
+        c.drawString(72, 750, "Jane Doe")
+        c.drawString(72, 730, "jane.doe@example.com")
+        c.save()
+
+        extracted = extract_text_from_pdf(buf.getvalue())
+        # A real text layer round-trips exactly; OCR output has enough character-level
+        # noise (spacing, ligatures) that an exact match here would be unlikely if OCR
+        # had run instead.
+        assert extracted == "Jane Doe\njane.doe@example.com"

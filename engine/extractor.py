@@ -5,6 +5,7 @@ Software, Healthcare, Business, Finance, etc.
 """
 
 import io
+import os
 import re
 from typing import Dict, Any
 
@@ -17,6 +18,61 @@ try:
     from docx import Document
 except ImportError:
     Document = None
+
+try:
+    import pymupdf
+except ImportError:
+    pymupdf = None
+
+try:
+    import pytesseract
+    from PIL import Image
+except ImportError:
+    pytesseract = None
+    Image = None
+
+# Lets local (especially Windows) dev environments point at a Tesseract install that
+# isn't on PATH. The Docker image installs tesseract-ocr via apt, which puts it on PATH
+# inside the container, so this is never needed in production.
+if pytesseract is not None and os.environ.get("TESSERACT_CMD"):
+    pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
+
+# Resumes are 1-3 pages; this bounds worst-case OCR time for a pathological upload
+# rather than trying to OCR an entire scanned book.
+_MAX_OCR_PAGES = 10
+
+
+def _ocr_pdf(file_bytes: bytes) -> str:
+    """
+    OCR fallback for PDFs with no real text layer - scanned or photographed pages,
+    where pypdf's extraction (which only reads embedded text objects) finds nothing
+    because there is no text to find, only a picture of text.
+    """
+    if pymupdf is None or pytesseract is None:
+        return ""
+    try:
+        doc = pymupdf.open(stream=file_bytes, filetype="pdf")
+    except Exception:
+        return ""
+
+    texts = []
+    try:
+        for page_index in range(min(doc.page_count, _MAX_OCR_PAGES)):
+            page = doc[page_index]
+            # 2x zoom (~144 DPI from a standard 72-DPI PDF unit) - enough resolution
+            # for OCR accuracy on typical resume text without being needlessly slow.
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
+            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            try:
+                page_text = pytesseract.image_to_string(image)
+            except Exception:
+                continue
+            if page_text.strip():
+                texts.append(page_text)
+    finally:
+        doc.close()
+
+    return "\n".join(texts)
 
 
 def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
@@ -35,20 +91,33 @@ def extract_text_from_bytes(file_bytes: bytes, filename: str) -> str:
 
 
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract text from PDF using pypdf."""
+    """
+    Extract text from PDF using pypdf, falling back to OCR when that finds essentially
+    nothing - a scanned or photographed PDF has no embedded text for pypdf to read, only
+    pixels, so only OCR (reading the image itself) can recover anything from it.
+    """
     if PdfReader is None:
         raise ImportError("pypdf is not installed.")
-    
+
     reader = PdfReader(io.BytesIO(file_bytes))
     extracted_text = []
-    
+
     for page in reader.pages:
         page_text = page.extract_text()
         if page_text:
             extracted_text.append(page_text)
-            
+
     raw_content = "\n".join(extracted_text)
-    return clean_resume_text(raw_content)
+    cleaned = clean_resume_text(raw_content)
+
+    # A handful of stray characters (a page number, a watermark) isn't a real text
+    # layer - treat anything under this as "nothing" and try OCR instead.
+    if len(cleaned.strip()) < 20:
+        ocr_text = clean_resume_text(_ocr_pdf(file_bytes))
+        if len(ocr_text.strip()) > len(cleaned.strip()):
+            return ocr_text
+
+    return cleaned
 
 
 def extract_text_from_docx(file_bytes: bytes) -> str:

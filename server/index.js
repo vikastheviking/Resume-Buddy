@@ -413,7 +413,10 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype || 'application/octet-stream' });
     formData.append('file', blob, req.file.originalname);
 
-    const engineRes = await engineFetch('/api/extract', { method: 'POST', body: formData });
+    // A PDF with a real text layer extracts almost instantly, but the OCR fallback
+    // (scanned/photographed PDFs) renders and reads each page as an image - genuinely
+    // slower, so this needs more room than the default engine timeout.
+    const engineRes = await engineFetch('/api/extract', { method: 'POST', body: formData }, 60000);
     const data = await engineRes.json();
     return res.status(engineRes.status).json(data);
   } catch (err) {

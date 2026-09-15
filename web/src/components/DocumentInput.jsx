@@ -23,8 +23,23 @@ export default function DocumentInput({ ordinal, label, hint, placeholder, value
       try {
         const data = await extractFile(file);
         onChange(data.text);
-        setStatus({ tone: 'ok', message: `Extracted ${data.word_count} words from ${file.name}` });
-        onNotify(`Loaded ${label.toLowerCase()} from ${file.name}`);
+        if (data.word_count === 0) {
+          // Extraction technically succeeded (no error), but found nothing to read - most
+          // often a scanned/photographed PDF with no real text layer, or a PDF whose fonts
+          // lack the encoding info needed to recover text. This must not look like success.
+          const isPdf = /\.pdf$/i.test(file.name);
+          setStatus({
+            tone: 'error',
+            message: isPdf
+              ? `Could not read any text from ${file.name}. If this is a scanned or photographed PDF, ` +
+                'there is no real text in it to extract - try a PDF exported directly from a word ' +
+                'processor, a DOCX file, or paste the text in below instead.'
+              : `Could not read any text from ${file.name}. Try a different file, or paste the text in below.`,
+          });
+        } else {
+          setStatus({ tone: 'ok', message: `Extracted ${data.word_count} words from ${file.name}` });
+          onNotify(`Loaded ${label.toLowerCase()} from ${file.name}`);
+        }
       } catch (error) {
         setStatus({ tone: 'error', message: error.message });
       }
