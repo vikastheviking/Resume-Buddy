@@ -39,20 +39,23 @@ except ImportError:
 if pytesseract is not None and os.environ.get("TESSERACT_CMD"):
     pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
 
-# Resumes are almost always 1-2 pages. A dense 2-page scan measured ~140MB of combined
-# process-tree memory locally (Python side + the separate tesseract OS process
-# pytesseract spawns) even after switching to grayscale/lower-resolution rendering -
-# and crashed the whole app on Render's memory-constrained free tier before that
-# change. This stays conservative rather than assuming a dev machine's headroom.
-_MAX_OCR_PAGES = 3
-# Per-page hard cap (pytesseract raises RuntimeError past this) - without it, one slow
-# page can run indefinitely toward the caller's own timeout and take every already-OCR'd
-# page down with it when that fires, instead of just skipping the one bad page.
-_OCR_PAGE_TIMEOUT_SECONDS = 20
+# Resumes are almost always 1-2 pages. A dense page that OCRs in well under a second
+# on a dev machine took over 20s on Render's free-tier CPU - measured live, not assumed
+# - so this stays at 2 rather than the resume-length norm of "up to 3", to keep the
+# worst case (both pages needing the full per-page timeout below) within what the
+# upload route's own timeout allows.
+_MAX_OCR_PAGES = 2
+# Per-page hard cap (pytesseract raises RuntimeError past this) - generous because
+# Render's free-tier CPU genuinely needs it, not because OCR should normally take this
+# long. Without this cap at all, one slow page could run indefinitely toward the
+# caller's own timeout and take every already-OCR'd page down with it when that fires,
+# instead of just skipping the one bad page.
+_OCR_PAGE_TIMEOUT_SECONDS = 45
 # Overall soft budget across all pages combined, checked between pages - stops
 # accumulating more pages (returning whatever was already recovered) rather than
-# guaranteeing the per-page cap times itself out to reach the same place.
-_OCR_TOTAL_BUDGET_SECONDS = 45
+# guaranteeing the per-page cap times itself out to reach the same place. Must stay
+# under the upload route's own timeout (server/index.js) minus some margin.
+_OCR_TOTAL_BUDGET_SECONDS = 85
 
 
 def _ocr_pdf(file_bytes: bytes) -> str:

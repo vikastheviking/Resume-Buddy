@@ -20,13 +20,14 @@ export default function DocumentInput({ ordinal, label, hint, placeholder, value
     async (file) => {
       if (!file) return;
       // PDFs with no real text layer fall back to OCR server-side, which is genuinely
-      // slower (rendering + reading each page as an image) - set that expectation up
-      // front rather than letting a normal-looking spinner sit for up to a minute.
+      // slower (rendering + reading each page as an image) - measured well over a
+      // minute for a dense multi-page scan on the actual hosting CPU. Set that
+      // expectation up front rather than letting a normal-looking spinner sit there.
       const isPdf = /\.pdf$/i.test(file.name);
       setStatus({
         tone: 'busy',
         message: isPdf
-          ? `Extracting text from ${file.name}… this can take up to a minute for a scanned document.`
+          ? `Extracting text from ${file.name}… scanned documents can take a minute or two.`
           : `Extracting text from ${file.name}…`,
       });
       try {
