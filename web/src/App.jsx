@@ -5,6 +5,7 @@ import { renderResumeMarkdown } from './markdown.jsx';
 import AuditPanel from './components/AuditPanel';
 import AuthDialog from './components/AuthDialog';
 import DocumentInput from './components/DocumentInput';
+import HistoryPanel from './components/HistoryPanel';
 import ScorePanel from './components/ScorePanel';
 import SkillGapPlan from './components/SkillGapPlan';
 
@@ -26,8 +27,10 @@ export default function App() {
   const [exporting, setExporting] = useState(null);
   const [loadingSample, setLoadingSample] = useState(false);
   const [user, setUser] = useState(null);
+  const [userId, setUserId] = useState(null);
   const [authPrompt, setAuthPrompt] = useState(null);
   const [authOpen, setAuthOpen] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [toast, setToast] = useState(null);
   const [theme, setTheme] = useState(readStoredTheme);
   const [quickScore, setQuickScore] = useState(null);
@@ -69,20 +72,23 @@ export default function App() {
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) {
         setUser(data.session.user.email);
+        setUserId(data.session.user.id);
         setToken(data.session.access_token);
       }
     });
 
     const { data: subscription } = supabase.auth.onAuthStateChange((_event, session) => {
       setUser(session ? session.user.email : null);
+      setUserId(session ? session.user.id : null);
       setToken(session ? session.access_token : null);
     });
 
     return () => subscription.subscription.unsubscribe();
   }, []);
 
-  const signIn = useCallback((email, token) => {
+  const signIn = useCallback((email, token, id) => {
     setUser(email);
+    setUserId(id || null);
     setToken(token || null);
     setAuthOpen(false);
     setAuthPrompt(null);
@@ -91,6 +97,7 @@ export default function App() {
   const signOut = async () => {
     await supabase.auth.signOut();
     setUser(null);
+    setUserId(null);
     setToken(null);
     notify('Signed out.');
   };
@@ -161,11 +168,44 @@ export default function App() {
           : `Rewritten. ATS score is ${data.updated_score}%.`,
       );
       requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+
+      // Best-effort history save, written directly to Supabase with the user's own
+      // session (RLS scopes it to their own rows) - a save failure (network blip,
+      // guest session with no history access, whatever) must never block the result
+      // the user is already looking at.
+      if (userId) {
+        supabase
+          .from('resumes')
+          .insert({
+            user_id: userId,
+            jd_text: jdText,
+            optimized_resume: data.optimized_resume,
+            actual_score: data.actual_score,
+            updated_score: data.updated_score,
+            parsed_data: data.optimized_audit,
+            status: 'completed',
+          })
+          .then(({ error }) => {
+            if (error) console.error('[history] could not save this optimization:', error.message);
+          });
+      }
     } catch (error) {
       if (!recoverFromAuthError(error)) notify(error.message);
     } finally {
       setBusy(false);
     }
+  };
+
+  const loadFromHistory = (row) => {
+    setJdText(row.jd_text || '');
+    setResult({
+      actual_score: row.actual_score,
+      updated_score: row.updated_score,
+      optimized_resume: row.optimized_resume,
+      optimized_audit: row.parsed_data || {},
+    });
+    setHistoryOpen(false);
+    requestAnimationFrame(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
   };
 
   const copyResume = async () => {
@@ -214,6 +254,11 @@ export default function App() {
             <button type="button" className="button button--ghost" onClick={loadSample} disabled={loadingSample}>
               {loadingSample ? 'Loading…' : 'Load example'}
             </button>
+            {user && (
+              <button type="button" className="button button--ghost" onClick={() => setHistoryOpen(true)}>
+                History
+              </button>
+            )}
             {user ? (
               <span className="identity">
                 <span className="identity-email" title={user}>
@@ -362,6 +407,13 @@ export default function App() {
         prompt={authPrompt}
         onClose={() => setAuthOpen(false)}
         onAuthenticated={signIn}
+        onNotify={notify}
+      />
+
+      <HistoryPanel
+        open={historyOpen}
+        onClose={() => setHistoryOpen(false)}
+        onSelect={loadFromHistory}
         onNotify={notify}
       />
 

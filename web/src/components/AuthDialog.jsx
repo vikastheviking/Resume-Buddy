@@ -189,7 +189,7 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
       if (error || !data.session) {
         throw new Error(error?.message || 'Invalid or expired code.');
       }
-      onAuthenticated(data.user.email, data.session.access_token);
+      onAuthenticated(data.user.email, data.session.access_token, data.user.id);
       onNotify(`Signed in as ${data.user.email}`);
     } catch (error) {
       setAlert({ tone: 'error', message: error.message });
@@ -204,7 +204,7 @@ export default function AuthDialog({ open, prompt, onClose, onAuthenticated, onN
     try {
       const { data, error } = await supabase.auth.signInAnonymously();
       if (error) throw error;
-      onAuthenticated(data.user?.email || GUEST_IDENTITY, data.session.access_token);
+      onAuthenticated(data.user?.email || GUEST_IDENTITY, data.session.access_token, data.user?.id);
       onNotify('Continuing as a guest.');
     } catch (error) {
       setAlert({
