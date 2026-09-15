@@ -4,6 +4,7 @@ Supports all industries: Engineering (Electrical, Mechanical, Civil), SQA/Testin
 Software, Healthcare, Business, Finance, etc.
 """
 
+import gc
 import io
 import os
 import re
@@ -38,10 +39,12 @@ except ImportError:
 if pytesseract is not None and os.environ.get("TESSERACT_CMD"):
     pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
 
-# Resumes are almost always 1-3 pages; this bounds worst-case OCR time for a
-# pathological upload rather than trying to OCR an entire scanned book. Render's free
-# tier CPU is meaningfully slower than a dev machine, so this stays conservative.
-_MAX_OCR_PAGES = 5
+# Resumes are almost always 1-2 pages. A dense 2-page scan measured ~140MB of combined
+# process-tree memory locally (Python side + the separate tesseract OS process
+# pytesseract spawns) even after switching to grayscale/lower-resolution rendering -
+# and crashed the whole app on Render's memory-constrained free tier before that
+# change. This stays conservative rather than assuming a dev machine's headroom.
+_MAX_OCR_PAGES = 3
 # Per-page hard cap (pytesseract raises RuntimeError past this) - without it, one slow
 # page can run indefinitely toward the caller's own timeout and take every already-OCR'd
 # page down with it when that fires, instead of just skipping the one bad page.
@@ -72,14 +75,26 @@ def _ocr_pdf(file_bytes: bytes) -> str:
             if time.monotonic() - started > _OCR_TOTAL_BUDGET_SECONDS:
                 break
             page = doc[page_index]
-            # 2x zoom (~144 DPI from a standard 72-DPI PDF unit) - enough resolution
-            # for OCR accuracy on typical resume text without being needlessly slow.
-            pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
-            image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+            # 1.5x zoom (~108 DPI from a standard 72-DPI PDF unit), grayscale - a 2x RGB
+            # render (the first version of this) spiked Python-process memory by ~120MB
+            # for just two dense pages and crashed the whole app on Render's memory-
+            # constrained free tier; that's on top of the separate tesseract OS process
+            # pytesseract spawns, which isn't even visible in that number. Grayscale
+            # drops the per-pixel footprint to a third of RGB's, and Tesseract does not
+            # need color for ordinary black-on-white document text - this is a real
+            # accuracy improvement for it too, not just a memory saving.
+            pix = page.get_pixmap(matrix=pymupdf.Matrix(1.5, 1.5), colorspace=pymupdf.csGRAY)
+            image = Image.frombytes("L", (pix.width, pix.height), pix.samples)
             try:
                 page_text = pytesseract.image_to_string(image, timeout=_OCR_PAGE_TIMEOUT_SECONDS)
             except Exception:
                 continue
+            finally:
+                # Encourage the interpreter to actually release this page's image data
+                # before rendering the next one, rather than letting them pile up until
+                # whenever the GC would otherwise get around to it.
+                del pix, image
+                gc.collect()
             if page_text.strip():
                 texts.append(page_text)
     finally:
