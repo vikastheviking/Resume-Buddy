@@ -39,23 +39,22 @@ except ImportError:
 if pytesseract is not None and os.environ.get("TESSERACT_CMD"):
     pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
 
-# Resumes are almost always 1-2 pages. A dense page that OCRs in well under a second
-# on a dev machine took over 20s on Render's free-tier CPU - measured live, not assumed
-# - so this stays at 2 rather than the resume-length norm of "up to 3", to keep the
-# worst case (both pages needing the full per-page timeout below) within what the
-# upload route's own timeout allows.
-_MAX_OCR_PAGES = 2
-# Per-page hard cap (pytesseract raises RuntimeError past this) - generous because
-# Render's free-tier CPU genuinely needs it, not because OCR should normally take this
-# long. Without this cap at all, one slow page could run indefinitely toward the
-# caller's own timeout and take every already-OCR'd page down with it when that fires,
-# instead of just skipping the one bad page.
-_OCR_PAGE_TIMEOUT_SECONDS = 45
-# Overall soft budget across all pages combined, checked between pages - stops
-# accumulating more pages (returning whatever was already recovered) rather than
-# guaranteeing the per-page cap times itself out to reach the same place. Must stay
-# under the upload route's own timeout (server/index.js) minus some margin.
-_OCR_TOTAL_BUDGET_SECONDS = 85
+# Render's own platform proxy - not anything configurable in this app's code - kills
+# HTTP requests at roughly 30s on the free tier (confirmed live: a request that was
+# still legitimately OCR-ing, not stuck, got Render's own 502 page, not an error from
+# this app). Extending this app's timeouts past that ceiling is pointless; the fix is
+# staying comfortably under it, not trying to outlast it. A single dense page measured
+# over 20s on Render's actual CPU (well under a second on a dev machine) even after
+# the grayscale/lower-resolution change below, so budgeting for more than one page
+# within what's left of a 30s ceiling isn't realistic - this reliably handles page one
+# (or a single-page resume, the overwhelmingly common case) rather than unreliably
+# attempting more.
+_MAX_OCR_PAGES = 1
+# Per-page hard cap (pytesseract raises RuntimeError past this). Deliberately shorter
+# than Render's ~30s ceiling so this app can return a clean, honest timeout message of
+# its own before the platform kills the connection with a generic error page instead.
+_OCR_PAGE_TIMEOUT_SECONDS = 20
+_OCR_TOTAL_BUDGET_SECONDS = 20
 
 
 def _ocr_pdf(file_bytes: bytes) -> str:

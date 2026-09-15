@@ -414,12 +414,15 @@ app.post('/api/upload', upload.single('file'), async (req, res) => {
     formData.append('file', blob, req.file.originalname);
 
     // A PDF with a real text layer extracts almost instantly, but the OCR fallback
-    // (scanned/photographed PDFs) renders and reads each page as an image - measured
-    // over 20s for a single dense page on Render's free-tier CPU (well under a second
-    // on a dev machine), so the engine's own OCR budget (engine/extractor.py) can take
-    // up to ~85s worst case; this must stay comfortably above that or Node aborts the
-    // request before the engine's own timeout ever gets a chance to.
-    const engineRes = await engineFetch('/api/extract', { method: 'POST', body: formData }, 100000);
+    // (scanned/photographed PDFs) renders and reads a page as an image - measured over
+    // 20s for a single dense page on Render's free-tier CPU (well under a second on a
+    // dev machine). Render's own platform proxy kills the whole connection at roughly
+    // 30s regardless of any timeout configured here - confirmed live, Render returns
+    // its own branded error page at that point, not this app's - so this Node-level
+    // timeout only needs to be long enough to let the engine's own OCR budget
+    // (engine/extractor.py, currently 20s) finish and reply on its own; it can never
+    // usefully be longer than Render's ~30s ceiling anyway.
+    const engineRes = await engineFetch('/api/extract', { method: 'POST', body: formData }, 25000);
     const data = await engineRes.json();
     return res.status(engineRes.status).json(data);
   } catch (err) {
