@@ -19,21 +19,29 @@ export default function DocumentInput({ ordinal, label, hint, placeholder, value
   const ingest = useCallback(
     async (file) => {
       if (!file) return;
-      setStatus({ tone: 'busy', message: `Extracting text from ${file.name}…` });
+      // PDFs with no real text layer fall back to OCR server-side, which is genuinely
+      // slower (rendering + reading each page as an image) - set that expectation up
+      // front rather than letting a normal-looking spinner sit for up to a minute.
+      const isPdf = /\.pdf$/i.test(file.name);
+      setStatus({
+        tone: 'busy',
+        message: isPdf
+          ? `Extracting text from ${file.name}… this can take up to a minute for a scanned document.`
+          : `Extracting text from ${file.name}…`,
+      });
       try {
         const data = await extractFile(file);
         onChange(data.text);
         if (data.word_count === 0) {
           // Extraction technically succeeded (no error), but found nothing to read - most
-          // often a scanned/photographed PDF with no real text layer, or a PDF whose fonts
-          // lack the encoding info needed to recover text. This must not look like success.
-          const isPdf = /\.pdf$/i.test(file.name);
+          // often a PDF whose fonts lack the encoding info needed to recover text (OCR
+          // already ran and still found nothing). This must not look like success.
           setStatus({
             tone: 'error',
             message: isPdf
-              ? `Could not read any text from ${file.name}. If this is a scanned or photographed PDF, ` +
-                'there is no real text in it to extract - try a PDF exported directly from a word ' +
-                'processor, a DOCX file, or paste the text in below instead.'
+              ? `Could not read any text from ${file.name}, even after trying OCR (it may be a very ` +
+                'low-resolution scan, blank, or corrupted). Try a clearer scan, a DOCX file, or paste ' +
+                'the text in below instead.'
               : `Could not read any text from ${file.name}. Try a different file, or paste the text in below.`,
           });
         } else {

@@ -7,6 +7,7 @@ Software, Healthcare, Business, Finance, etc.
 import io
 import os
 import re
+import time
 from typing import Dict, Any
 
 try:
@@ -37,9 +38,18 @@ except ImportError:
 if pytesseract is not None and os.environ.get("TESSERACT_CMD"):
     pytesseract.pytesseract.tesseract_cmd = os.environ["TESSERACT_CMD"]
 
-# Resumes are 1-3 pages; this bounds worst-case OCR time for a pathological upload
-# rather than trying to OCR an entire scanned book.
-_MAX_OCR_PAGES = 10
+# Resumes are almost always 1-3 pages; this bounds worst-case OCR time for a
+# pathological upload rather than trying to OCR an entire scanned book. Render's free
+# tier CPU is meaningfully slower than a dev machine, so this stays conservative.
+_MAX_OCR_PAGES = 5
+# Per-page hard cap (pytesseract raises RuntimeError past this) - without it, one slow
+# page can run indefinitely toward the caller's own timeout and take every already-OCR'd
+# page down with it when that fires, instead of just skipping the one bad page.
+_OCR_PAGE_TIMEOUT_SECONDS = 20
+# Overall soft budget across all pages combined, checked between pages - stops
+# accumulating more pages (returning whatever was already recovered) rather than
+# guaranteeing the per-page cap times itself out to reach the same place.
+_OCR_TOTAL_BUDGET_SECONDS = 45
 
 
 def _ocr_pdf(file_bytes: bytes) -> str:
@@ -56,15 +66,18 @@ def _ocr_pdf(file_bytes: bytes) -> str:
         return ""
 
     texts = []
+    started = time.monotonic()
     try:
         for page_index in range(min(doc.page_count, _MAX_OCR_PAGES)):
+            if time.monotonic() - started > _OCR_TOTAL_BUDGET_SECONDS:
+                break
             page = doc[page_index]
             # 2x zoom (~144 DPI from a standard 72-DPI PDF unit) - enough resolution
             # for OCR accuracy on typical resume text without being needlessly slow.
             pix = page.get_pixmap(matrix=pymupdf.Matrix(2, 2))
             image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
             try:
-                page_text = pytesseract.image_to_string(image)
+                page_text = pytesseract.image_to_string(image, timeout=_OCR_PAGE_TIMEOUT_SECONDS)
             except Exception:
                 continue
             if page_text.strip():
