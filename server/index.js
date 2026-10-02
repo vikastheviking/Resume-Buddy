@@ -372,11 +372,31 @@ app.post('/api/auth/validate-email', emailCheckLimiter, async (req, res) => {
   }
 });
 
-// Reports whether an email/phone already has an account, using the profiles table
-// (kept in sync with auth.users by a database trigger - see supabase_profiles_setup.sql).
-// This is what makes Sign In and Create Account behave differently: Sign In needs the
-// email to exist, Create Account needs the email and phone to both be free. Needs the
-// service_role key because RLS on `profiles` only lets a user read their own row.
+// Reports whether an email/phone already has an account. This is what makes Sign In
+// and Create Account behave differently: Sign In needs the email to exist, Create
+// Account needs the email and phone to both be free.
+//
+// It reads Supabase Auth's own user list through the admin API (service_role key)
+// rather than a separate profiles table, so there is no SQL to run in the Supabase
+// dashboard and no table to keep in sync. Full name and phone are already stored on
+// each user as user_metadata by signInWithOtp's options.data. The list is paged, which
+// is fine at this app's scale; it would need an indexed table only at many thousands
+// of accounts.
+const USERS_PER_PAGE = 1000;
+
+async function findAuthUsers({ email, phone }) {
+  const found = { emailExists: false, phoneExists: false };
+  for (let page = 1; ; page += 1) {
+    const { data, error } = await supabaseAdmin.auth.admin.listUsers({ page, perPage: USERS_PER_PAGE });
+    if (error) throw error;
+    for (const user of data.users) {
+      if (email && user.email && user.email.toLowerCase() === email) found.emailExists = true;
+      if (phone && user.user_metadata?.phone?.trim() === phone) found.phoneExists = true;
+    }
+    if (data.users.length < USERS_PER_PAGE) return found;
+  }
+}
+
 app.post('/api/auth/check-availability', authLimiter, async (req, res) => {
   try {
     const { email, phone } = req.body || {};
@@ -387,31 +407,13 @@ app.post('/api/auth/check-availability', authLimiter, async (req, res) => {
       return res.status(500).json({ error: 'Server is not configured for account existence checks.' });
     }
 
+    const cleanEmail = email ? email.trim().toLowerCase() : null;
+    const cleanPhone = phone ? phone.trim() : null;
+    const found = await findAuthUsers({ email: cleanEmail, phone: cleanPhone });
+
     const result = {};
-
-    // limit(1) rather than maybeSingle(): maybeSingle errors when more than one row
-    // matches (e.g. two accounts that predate the phone check share a number), which
-    // would fail the whole request and block sign-in.
-    if (email) {
-      const { data, error } = await supabaseAdmin
-        .from('profiles')
-        .select('id')
-        .eq('email', email.trim().toLowerCase())
-        .limit(1);
-      if (error) throw error;
-      result.emailExists = data.length > 0;
-    }
-
-    if (phone) {
-      const { data, error } = await supabaseAdmin
-        .from('profiles')
-        .select('id')
-        .eq('phone', phone.trim())
-        .limit(1);
-      if (error) throw error;
-      result.phoneExists = data.length > 0;
-    }
-
+    if (cleanEmail) result.emailExists = found.emailExists;
+    if (cleanPhone) result.phoneExists = found.phoneExists;
     res.json(result);
   } catch (err) {
     return fail(res, 502, 'Could not check account availability.', err);

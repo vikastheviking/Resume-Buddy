@@ -64,8 +64,7 @@ Render provides free hosting with **automatic HTTPS/SSL certificates** and free 
      - `NODE_ENV`: `production`
      - `SUPABASE_URL`, `SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`: your
        Supabase project's API URL, anon key, and service_role key (Project
-       Settings -> API). Run `supabase_profiles_setup.sql` once in the
-       Supabase SQL Editor first. Accounts, sessions, and OTP email delivery
+       Settings -> API). No SQL setup is needed. Accounts, sessions, and OTP email delivery
        all live in Supabase - not on Render's filesystem, and not subject to
        Render's outbound network restrictions - so they survive redeploys and
        work regardless of what Render allows outbound.
