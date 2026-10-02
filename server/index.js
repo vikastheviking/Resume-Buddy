@@ -170,6 +170,18 @@ const authLimiter = rateLimit({
   message: { success: false, error: 'Too many authentication attempts. Please wait a few minutes.' },
 });
 
+// The sign-in dialog calls validate-email as the user types (debounced), so a single
+// sign-in can make a dozen of these calls. Sharing authLimiter's budget meant typing an
+// address used it up and the "Email me a code" step then failed with "Too many
+// authentication attempts". It only does a DNS lookup and sends no email, so it gets
+// its own, looser limit.
+const emailCheckLimiter = rateLimit({
+  ...rateLimitOptions,
+  windowMs: 15 * 60 * 1000,
+  limit: 120,
+  message: { isValid: false, error: 'Too many email checks. Please wait a few minutes.' },
+});
+
 app.use('/api/', generalLimiter);
 
 // ---------------------------------------------------------------------------
@@ -348,7 +360,7 @@ app.get('/api/sample', async (req, res) => {
   }
 });
 
-app.post('/api/auth/validate-email', authLimiter, async (req, res) => {
+app.post('/api/auth/validate-email', emailCheckLimiter, async (req, res) => {
   try {
     const { email } = req.body || {};
     if (!email) {
@@ -377,14 +389,17 @@ app.post('/api/auth/check-availability', authLimiter, async (req, res) => {
 
     const result = {};
 
+    // limit(1) rather than maybeSingle(): maybeSingle errors when more than one row
+    // matches (e.g. two accounts that predate the phone check share a number), which
+    // would fail the whole request and block sign-in.
     if (email) {
       const { data, error } = await supabaseAdmin
         .from('profiles')
         .select('id')
         .eq('email', email.trim().toLowerCase())
-        .maybeSingle();
+        .limit(1);
       if (error) throw error;
-      result.emailExists = !!data;
+      result.emailExists = data.length > 0;
     }
 
     if (phone) {
@@ -392,9 +407,9 @@ app.post('/api/auth/check-availability', authLimiter, async (req, res) => {
         .from('profiles')
         .select('id')
         .eq('phone', phone.trim())
-        .maybeSingle();
+        .limit(1);
       if (error) throw error;
-      result.phoneExists = !!data;
+      result.phoneExists = data.length > 0;
     }
 
     res.json(result);
