@@ -124,16 +124,15 @@ anon key) - Node never sees a password or OTP code, only the resulting access to
 ├── scripts/                  developer utilities
 │   └── check_api_key.py       LLM provider key/latency diagnostics
 ├── docs/deployment.md        cloud deployment guide
-├── supabase_profiles_setup.sql  one-time Supabase SQL migration (profiles table + trigger)
 ├── Dockerfile                multi-runtime production image
 ├── render.yaml               Render.com blueprint
 └── Procfile                  Railway / Fly.io / Heroku entry point
 ```
 
 User accounts, sessions, and OTP email delivery all live in Supabase Auth - Render only
-ever hosts the app, never the account data or the email-sending step. `profiles` (see
-`supabase_profiles_setup.sql`) stores full name/phone alongside each Supabase Auth user,
-kept in sync by a database trigger.
+ever hosts the app, never the account data or the email-sending step. Full name and phone
+are stored on each Supabase Auth user as `user_metadata`, so there is no extra table or SQL
+to set up.
 
 ---
 
@@ -235,7 +234,7 @@ repo root on the path so `engine.*` imports resolve without any `sys.path` manip
 | `PORT` | no | Node web server port (default `3000`) |
 | `PYTHON_PORT` | no | Python engine port (default `5001`) |
 | `PYTHON_BIN` | no | Interpreter used to spawn the engine (default `python`) |
-| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | yes | Auth, sessions, and the `profiles` table. See `.env.example` and `supabase_profiles_setup.sql`. |
+| `SUPABASE_URL` / `SUPABASE_ANON_KEY` / `SUPABASE_SERVICE_ROLE_KEY` | yes | Auth, sessions, and the Sign In / Create Account availability check. See `.env.example`. |
 | `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY` | yes | Same values as above, built into the frontend bundle at build time (the browser talks to Supabase directly). |
 | `CORS_ORIGINS` | no | Comma-separated origin allowlist. Same-origin only when unset. |
 | `ENGINE_TIMEOUT_MS` | no | Timeout for engine calls (default `20000`) |
@@ -256,7 +255,7 @@ Accounts are entirely passwordless, managed by Supabase Auth: identity is proven
 controlling the mailbox (email OTP), not a password this app never stores. Sign-in
 requires the account to already exist; Create Account requires the email and phone to
 both be free - checked server-side (`/api/auth/check-availability` in `server/index.js`,
-against the `profiles` table) before Supabase ever sends a code.
+against Supabase Auth's user list) before Supabase ever sends a code.
 
 The browser holds a genuine Supabase access token (JWT) after signing in; `/api/optimize`,
 `/api/skill-gap-plan`, and the export routes require a valid one (`requireAuth` in
